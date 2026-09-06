@@ -1,0 +1,6 @@
+{
+  "name": "ALCO Meta Ads Analyst",
+  "description": "AI-powered Meta Ads diagnostic & recommendation platform for business owners and beginner advertisers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
