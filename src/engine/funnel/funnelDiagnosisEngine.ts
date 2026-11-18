@@ -114,6 +114,14 @@ export function detectPrimaryBottleneck(
 
   const evidence: string[] = [];
 
+  const isConfirmedZeroLp = Boolean(
+    isKnown(linkClicks) &&
+      linkClicks >= 25 &&
+      landingPageViews === 0 &&
+      lpMetrics !== undefined &&
+      lpMetrics.sessions === 0
+  );
+
   // =========================================================================
   // RULE 1: INSUFFICIENT DATA & UNAVAILABLE METRICS PROTECTION
   // =========================================================================
@@ -124,7 +132,7 @@ export function detectPrimaryBottleneck(
     (isKnown(linkClicks) && linkClicks < 25) ||
     (sessions !== undefined && sessions < 30);
 
-  if (isDataUnavailable || isLowSpendNoPurchase || (purchases === 0 && isSmallSample)) {
+  if (!isConfirmedZeroLp && (isDataUnavailable || isLowSpendNoPurchase || (purchases === 0 && isSmallSample))) {
     evidence.push(`Total spend saat ini: ${fmtRp(spend)} (Ambang batas 0.7x Target CPA: ${fmtRp(targets.targetCpa * 0.7)})`);
     evidence.push(`Tayangan: ${fmtIdNumber(impressions)} (Standar minimal uji: 800)`);
     evidence.push(`Link clicks: ${fmtIdNumber(linkClicks)} | Sesi LP: ${sessions !== undefined ? sessions : 'N/A'}`);
@@ -170,19 +178,28 @@ export function detectPrimaryBottleneck(
   const detectedIssues: IssueCandidate[] = [];
 
   // =========================================================================
-  // CANDIDATE A: TECHNICAL LP PROBLEM (Loading crash / Script errors / High Rage Clicks)
+  // CANDIDATE A: TECHNICAL LP PROBLEM (Requires corroborating technical evidence)
+  // Low LP View Rate alone without Clarity/technical telemetry is treated as a hypothesis, not a confirmed crash.
   // =========================================================================
-  const isScriptCrash = lpMetrics && lpMetrics.scriptErrors >= 8;
-  const isLpViewLeak = isKnown(linkClicks) && linkClicks >= 25 && lpViewRate !== null && lpViewRate < 72.0 && (metaMetrics.landingPageViews !== undefined || sessions !== undefined);
-  const isHighRage = rageClickRate !== null && rageClickRate >= 7.0 && (lpMetrics?.rageClicks || 0) >= 5;
+  const isScriptCrash = Boolean(lpMetrics && lpMetrics.scriptErrors >= 8);
+  const isLpViewLeak = Boolean(
+    isKnown(linkClicks) &&
+      linkClicks >= 25 &&
+      lpViewRate !== null &&
+      lpViewRate < 72.0 &&
+      (isKnown(metaMetrics.landingPageViews) || sessions !== undefined)
+  );
+  const isHighRage = Boolean(rageClickRate !== null && rageClickRate >= 7.0 && (lpMetrics?.rageClicks || 0) >= 5);
+  const hasTechnicalEvidence = isScriptCrash || isHighRage || isConfirmedZeroLp;
+  const hasUnconfirmedLpViewHypothesis = isLpViewLeak && !hasTechnicalEvidence;
 
-  if (isScriptCrash || isLpViewLeak || isHighRage) {
+  if (hasTechnicalEvidence) {
     const techSignals: string[] = [];
     let severity = 85;
     let isVeryStrong = false;
 
-    if (isLpViewLeak) {
-      techSignals.push(`LP View Rate hanya ${lpViewRate}% dari ${fmtIdNumber(linkClicks)} klik iklan (kebocoran loading: ${(100 - (lpViewRate ?? 0)).toFixed(1)}%)`);
+    if (isLpViewLeak && lpViewRate !== null) {
+      techSignals.push(`LP View Rate hanya ${lpViewRate}% dari ${fmtIdNumber(linkClicks)} klik iklan (kebocoran loading: ${(100 - lpViewRate).toFixed(1)}%)`);
       severity += 10;
       if (lpViewRate < 60) isVeryStrong = true;
     }
@@ -195,12 +212,17 @@ export function detectPrimaryBottleneck(
       techSignals.push(`Rage click tinggi: ${rageClickRate}% (${lpMetrics?.rageClicks} klik frustrasi pengunjung)`);
       severity += 10;
     }
+    if (isConfirmedZeroLp) {
+      techSignals.push(`Terkonfirmasi 0 Landing Page Views dan 0 sesi Clarity dari ${fmtIdNumber(linkClicks)} link clicks.`);
+      severity += 15;
+      isVeryStrong = true;
+    }
 
     detectedIssues.push({
       bottleneck: 'LANDING_PAGE_TECHNICAL',
       title: 'Kendala Teknis & Kecepatan Memuat Landing Page',
       severityScore: severity,
-      description: 'Pengunjung yang tertarik mengklik iklan terhalang oleh loading halaman yang lambat atau error script JavaScript di mobile browser.',
+      description: 'Pengunjung yang tertarik mengklik iklan terhalang oleh loading halaman yang lambat, halaman tidak termuat, atau error script JavaScript di browser.',
       signals: techSignals,
       action: 'Lakukan audit mobile speed (PageSpeed/Lighthouse) dan periksa error JavaScript pada browser mobile untuk memastikan seluruh skrip checkout berfungsi.',
       dontDo: 'Jangan menyalahkan materi iklan Meta Ads! Iklan sudah terbukti berhasil mengundang klik audiens.',
@@ -300,8 +322,9 @@ export function detectPrimaryBottleneck(
   const isWeakCtr = isKnown(ctr) && ctr < 1.05 && isKnown(linkClicks) && linkClicks > 15;
   const isExpensiveCpc = isKnown(cpc) && cpc > (targets.targetCpc ? targets.targetCpc * 1.35 : 4500);
   const isUnderFreq = !isKnown(frequency) || frequency < 2.3;
+  const hasPostClickLpContext = landingPageViews !== null || lpMetrics !== undefined;
 
-  if (isWeakCtr && (isExpensiveCpc || (isKnown(cpa) && cpa > targets.targetCpa)) && isUnderFreq) {
+  if (isWeakCtr && (isExpensiveCpc || (isKnown(cpa) && cpa > targets.targetCpa)) && isUnderFreq && hasPostClickLpContext) {
     const adsSignals: string[] = [
       `CTR iklan rendah: ${fmtPct(ctr)} (di bawah batas target minimal 1.2% - 1.5%)`,
       `Biaya per klik (CPC): ${fmtRp(cpc)}`,
@@ -451,36 +474,58 @@ export function detectPrimaryBottleneck(
   }
 
   // =========================================================================
-  // SCENARIO J: MISSING LP METRICS & UNKNOWN ROOT CAUSE
+  // SCENARIO J: MISSING LP METRICS & UNKNOWN ROOT CAUSE (OR UNCONFIRMED HYPOTHESIS)
   // =========================================================================
   if (!lpMetrics) {
     evidence.push(`Spend terkumpul: ${fmtRp(spend)} | Clicks: ${fmtIdNumber(linkClicks)}`);
     evidence.push(`ROAS: ${fmtRoas(roas)} | CPA: ${fmtRp(cpa)}`);
-    evidence.push('Data telemetri perilaku Landing Page (Microsoft Clarity / Event Pixel) belum terhubung.');
+    if (hasUnconfirmedLpViewHypothesis && lpViewRate !== null) {
+      evidence.push(
+        `Hipotesis Teknis / Tracking (Belum Terkonfirmasi): LP View Rate Meta tercatat ${lpViewRate}% (${fmtIdNumber(landingPageViews)} dari ${fmtIdNumber(linkClicks)} klik), namun belum ada telemetri browser (Clarity/PageSpeed) untuk membedakan bottleneck kecepatan loading vs selisih tracking Pixel.`
+      );
+    }
+    evidence.push('Data telemetri perilaku Landing Page (Microsoft Clarity / Script Error) belum terhubung.');
 
     return {
       primaryBottleneck: 'UNKNOWN',
-      secondaryIssue: null,
-      confidence: 'Medium',
-      bottleneckTitle: 'Data Telemetri Landing Page Belum Terhubung',
-      headlineSummary: isKnown(cpa)
+      secondaryIssue: hasUnconfirmedLpViewHypothesis && lpViewRate !== null
+        ? `Hipotesis Awal (Belum Terkonfirmasi): Selisih Link Click ke LP View (${lpViewRate}%) berpotensi berasal dari latency loading mobile, redirect, atau blocking Pixel.`
+        : null,
+      confidence: hasUnconfirmedLpViewHypothesis ? 'Low' : 'Medium',
+      bottleneckTitle: hasUnconfirmedLpViewHypothesis
+        ? 'Hipotesis Kebocoran Landing Page (Belum Terkonfirmasi Bukti Teknis)'
+        : 'Data Telemetri Landing Page Belum Terhubung',
+      headlineSummary: hasUnconfirmedLpViewHypothesis && lpViewRate !== null
+        ? `Hipotesis Awal: LP View Rate tercatat ${lpViewRate}%, namun tanpa telemetri teknis browser (Clarity/PageSpeed), sistem belum dapat memastikan apakah ini kendala loading teknis atau selisih pelacakan Pixel.`
+        : isKnown(cpa)
         ? `Terdeteksi penurunan konversi (CPA ${fmtRp(cpa)}), namun data perilaku pengunjung di landing page belum tersedia untuk mendiagnosis titik kebocoran.`
         : 'Data konversi/revenue belum lengkap dan telemetri perilaku pengunjung di landing page belum tersedia untuk mendiagnosis titik kebocoran.',
-      detailedReason: 'Meta Ads berhasil mendatangkan traffic, namun tanpa data telemetri landing page (seperti Scroll Depth, Quick Back, atau Script Errors), sistem tidak dapat memastikan apakah kendala berada pada kecepatan web, konten halaman, atau alur pembayaran.',
+      detailedReason: hasUnconfirmedLpViewHypothesis
+        ? 'Angka LP View Rate rendah dari Meta Ads saja belum cukup untuk menyimpulkan crash teknis atau error JavaScript karena bisa dipengaruhi keterlambatan loading Pixel, redirect URL, atau ad-blocker pengguna.'
+        : 'Meta Ads berhasil mendatangkan traffic, namun tanpa data telemetri landing page (seperti Scroll Depth, Quick Back, atau Script Errors), sistem tidak dapat memastikan apakah kendala berada pada kecepatan web, konten halaman, atau alur pembayaran.',
       evidence,
-      recommendedAction: 'Hubungkan integrasi Microsoft Clarity atau lengkapi pelacakan Meta Pixel Standard Events (ViewContent, InitiateCheckout) untuk diagnosis akurat.',
-      dontDoYet: 'Jangan merombak landing page atau mengganti creative secara membabi buta tanpa data telemetri yang jelas.',
-      priority: 'HIGH',
+      recommendedAction: hasUnconfirmedLpViewHypothesis
+        ? 'Uji kecepatan memuat halaman di mobile (PageSpeed/Lighthouse) dan verifikasi penembakan event PageView Meta Pixel sebelum menyimpulkan kerusakan teknis.'
+        : 'Hubungkan integrasi Microsoft Clarity atau lengkapi pelacakan Meta Pixel Standard Events (ViewContent, InitiateCheckout) untuk diagnosis akurat.',
+      dontDoYet: 'Jangan langsung menyimpulkan crash JavaScript atau merombak landing page secara membabi buta tanpa verifikasi telemetri teknis.',
+      priority: hasUnconfirmedLpViewHypothesis ? 'MEDIUM' : 'HIGH',
     };
   }
 
   // Default Monitor Fallback
   evidence.push(`ROAS: ${fmtRoas(roas)} | CTR: ${fmtPct(ctr)} | CPC: ${fmtRp(cpc)}`);
   if (cpaEvaluationText) evidence.push(cpaEvaluationText);
+  if (hasUnconfirmedLpViewHypothesis && lpViewRate !== null) {
+    evidence.push(
+      `Hipotesis (Belum Terkonfirmasi Bukti Crash): LP View Rate ${lpViewRate}% dengan 0 error JS kritis & rage click normal — periksa latency redirect atau firing Meta Pixel.`
+    );
+  }
 
   return {
     primaryBottleneck: 'MONITOR',
-    secondaryIssue: null,
+    secondaryIssue: hasUnconfirmedLpViewHypothesis && lpViewRate !== null
+      ? `Hipotesis (Belum Terkonfirmasi): LP View Rate ${lpViewRate}% tanpa bukti script error/rage click kritis.`
+      : null,
     confidence: 'Medium',
     bottleneckTitle: 'Alur Funnel Berada dalam Batas Wajar (Perlu Pemantauan)',
     headlineSummary: `Metrik berada dalam rentang toleransi operasional. ${cpaEvaluationText || 'Sebagian metrik konversi atau revenue belum terlaporkan lengkap.'}`.trim(),

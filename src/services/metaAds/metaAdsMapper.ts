@@ -4,7 +4,9 @@ import {
   AdCreative, 
   PerformanceMetrics, 
   TimePeriod,
-  EntityStatus
+  EntityStatus,
+  DailyTrendPoint,
+  DataAvailability
 } from '../../types';
 import { 
   MetaGraphCampaignRaw, 
@@ -27,33 +29,122 @@ export function parseNullableNumber(val: any): number | null {
 }
 
 /**
- * Maps Meta action arrays to specific metric values.
- * Returns null if the action type was not measured by Meta (UNKNOWN !== ZERO).
+ * Finds the first matching action item strictly following the caller's priority order (`actionTypes`).
  */
-export function getActionValue(actions?: MetaGraphActionItem[], actionTypes: string[] = []): number | null {
+function findPreferredAction(
+  actions: MetaGraphActionItem[] | undefined,
+  actionTypes: string[]
+): { type: string; value: number | null } | null {
   if (!actions || !Array.isArray(actions) || actions.length === 0) {
     return null;
   }
 
-  const match = actions.find((item) => 
-    actionTypes.some((type) => item.action_type.toLowerCase() === type.toLowerCase())
-  );
+  for (const preferredType of actionTypes) {
+    const match = actions.find(
+      (item) => item.action_type && item.action_type.toLowerCase() === preferredType.toLowerCase()
+    );
+    if (match) {
+      return {
+        type: preferredType,
+        value: parseNullableNumber(match.value),
+      };
+    }
+  }
 
-  if (!match) return null;
-  return parseNullableNumber(match.value);
+  return null;
 }
 
 /**
- * Standard Meta Conversion Event Type Candidates
+ * Maps Meta action arrays to specific metric values following `actionTypes` priority order.
+ * Returns null if the action type was not measured by Meta (UNKNOWN !== ZERO).
+ */
+export function getActionValue(actions?: MetaGraphActionItem[], actionTypes: string[] = []): number | null {
+  const match = findPreferredAction(actions, actionTypes);
+  return match ? match.value : null;
+}
+
+/**
+ * Standard Meta Conversion Event Type Candidates (ordered by canonical priority)
  */
 export const ACTION_TYPES = {
   LINK_CLICKS: ['link_click', 'outbound_click'],
   OUTBOUND_CLICKS: ['outbound_click'],
   LANDING_PAGE_VIEWS: ['landing_page_view', 'omni_landing_page_view', 'landing_page_views'],
-  ADD_TO_CART: ['add_to_cart', 'omni_add_to_cart'],
-  INITIATE_CHECKOUT: ['initiate_checkout', 'omni_initiated_checkout', 'initiate_checkout_total'],
-  PURCHASES: ['purchase', 'omni_purchase'],
+  ADD_TO_CART: ['add_to_cart', 'omni_add_to_cart', 'offsite_conversion.fb_pixel_add_to_cart'],
+  INITIATE_CHECKOUT: ['initiate_checkout', 'omni_initiated_checkout', 'offsite_conversion.fb_pixel_initiate_checkout', 'initiate_checkout_total'],
+  PURCHASES: [
+    'purchase',
+    'omni_purchase',
+    'offsite_conversion.fb_pixel_purchase',
+    'onsite_web_purchase',
+    'onsite_web_app_purchase',
+  ],
 };
+
+/**
+ * Extracts purchase count and revenue using the SAME canonical purchase action_type
+ * whenever present in both `actions` and `action_values`, guaranteeing attribution consistency.
+ */
+export function extractPurchaseAndRevenue(
+  actions?: MetaGraphActionItem[],
+  actionValues?: MetaGraphActionItem[]
+): {
+  purchases: number | null;
+  revenue: number | null;
+  purchaseActionType: string | null;
+  attributionConsistent: boolean;
+} {
+  for (const candidateType of ACTION_TYPES.PURCHASES) {
+    const actionMatch = findPreferredAction(actions, [candidateType]);
+    const valueMatch = findPreferredAction(actionValues, [candidateType]);
+    if (actionMatch && valueMatch) {
+      return {
+        purchases: actionMatch.value,
+        revenue: valueMatch.value,
+        purchaseActionType: candidateType,
+        attributionConsistent: true,
+      };
+    }
+  }
+
+  const fallbackPurchase = findPreferredAction(actions, ACTION_TYPES.PURCHASES);
+  const fallbackRevenue = findPreferredAction(actionValues, ACTION_TYPES.PURCHASES);
+
+  if (fallbackPurchase && fallbackRevenue) {
+    // Both exist but under different action_type keys (e.g. omni_purchase vs fb_pixel_purchase)
+    return {
+      purchases: fallbackPurchase.value,
+      revenue: fallbackRevenue.value,
+      purchaseActionType: `${fallbackPurchase.type} / ${fallbackRevenue.type}`,
+      attributionConsistent: false,
+    };
+  }
+
+  if (fallbackPurchase) {
+    return {
+      purchases: fallbackPurchase.value,
+      revenue: null,
+      purchaseActionType: fallbackPurchase.type,
+      attributionConsistent: true,
+    };
+  }
+
+  if (fallbackRevenue) {
+    return {
+      purchases: null,
+      revenue: fallbackRevenue.value,
+      purchaseActionType: fallbackRevenue.type,
+      attributionConsistent: false,
+    };
+  }
+
+  return {
+    purchases: null,
+    revenue: null,
+    purchaseActionType: null,
+    attributionConsistent: true,
+  };
+}
 
 /**
  * Converts TimePeriod to deterministic Meta API Date Ranges (Current vs Previous).
@@ -150,6 +241,8 @@ export function createUnknownPerformanceMetrics(): PerformanceMetrics {
     addToCart: null,
     initiateCheckout: null,
     dataAvailability: 'UNAVAILABLE',
+    purchaseActionType: null,
+    attributionConsistent: true,
   };
 }
 
@@ -163,9 +256,14 @@ export function mapMetaInsightsToPerformanceMetrics(insight?: MetaGraphInsightsR
   const reach = parseNullableNumber(insight.reach);
   const clicks = parseNullableNumber(insight.clicks);
 
-  // Actions extraction (null if unmeasured by Meta)
-  const purchases = getActionValue(insight.actions, ACTION_TYPES.PURCHASES);
-  const revenue = getActionValue(insight.action_values, ACTION_TYPES.PURCHASES);
+  // Paired Purchase + Revenue extraction (guarantees canonical attribution consistency)
+  const {
+    purchases,
+    revenue,
+    purchaseActionType,
+    attributionConsistent,
+  } = extractPurchaseAndRevenue(insight.actions, insight.action_values);
+
   const linkClicks = getActionValue(insight.actions, ACTION_TYPES.LINK_CLICKS);
   const outboundClicks = getActionValue(insight.actions, ACTION_TYPES.OUTBOUND_CLICKS);
   const landingPageViews = getActionValue(insight.actions, ACTION_TYPES.LANDING_PAGE_VIEWS);
@@ -179,19 +277,17 @@ export function mapMetaInsightsToPerformanceMetrics(insight?: MetaGraphInsightsR
     cpa = Math.round(spend / purchases);
   }
 
-  // ROAS: only when spend > 0 and revenue is known
+  // ROAS: only when spend > 0 and revenue is known (spend === 0 -> undefined/null, NOT 0/0=0)
   let roas: number | null = null;
   if (revenue !== null && spend !== null && spend > 0) {
     roas = Number((revenue / spend).toFixed(2));
-  } else if (revenue !== null && spend !== null && spend === 0 && revenue === 0) {
-    roas = 0;
   }
 
   // CTR: clicks / impressions * 100
   let ctr: number | null = null;
   if (clicks !== null && impressions !== null && impressions > 0) {
     ctr = Number(((clicks / impressions) * 100).toFixed(2));
-  } else {
+  } else if (impressions === null || impressions > 0) {
     ctr = parseNullableNumber(insight.ctr);
   }
 
@@ -199,7 +295,7 @@ export function mapMetaInsightsToPerformanceMetrics(insight?: MetaGraphInsightsR
   let cpc: number | null = null;
   if (spend !== null && clicks !== null && clicks > 0) {
     cpc = Math.round(spend / clicks);
-  } else {
+  } else if (clicks === null || clicks > 0) {
     cpc = parseNullableNumber(insight.cpc);
   }
 
@@ -207,7 +303,7 @@ export function mapMetaInsightsToPerformanceMetrics(insight?: MetaGraphInsightsR
   let cpm: number | null = null;
   if (spend !== null && impressions !== null && impressions > 0) {
     cpm = Math.round((spend / impressions) * 1000);
-  } else {
+  } else if (impressions === null || impressions > 0) {
     cpm = parseNullableNumber(insight.cpm);
   }
 
@@ -220,13 +316,26 @@ export function mapMetaInsightsToPerformanceMetrics(insight?: MetaGraphInsightsR
     frequency = Number((impressions / reach).toFixed(2));
   }
 
-  const hasAnyPrimaryField = spend !== null || impressions !== null || reach !== null || clicks !== null;
-  const dataAvailability = 
-    (spend !== null && impressions !== null && clicks !== null) 
-      ? 'AVAILABLE' 
-      : hasAnyPrimaryField 
-      ? 'PARTIAL' 
-      : 'UNAVAILABLE';
+  // Strict UNKNOWN vs ZERO vs PARTIAL availability classification
+  const hasAnyMetric =
+    spend !== null ||
+    impressions !== null ||
+    reach !== null ||
+    clicks !== null ||
+    purchases !== null ||
+    revenue !== null;
+  const hasCoreDelivery = spend !== null && impressions !== null && clicks !== null;
+  const isZeroDelivery = spend === 0 && impressions === 0 && clicks === 0;
+  const hasConversionCompleteness =
+    isZeroDelivery ||
+    (purchases !== null && (purchases === 0 || revenue !== null));
+  const hasReachCompleteness = impressions === 0 || reach !== null;
+
+  const dataAvailability: DataAvailability = !hasAnyMetric
+    ? 'UNAVAILABLE'
+    : (hasCoreDelivery && hasConversionCompleteness && hasReachCompleteness)
+    ? 'AVAILABLE'
+    : 'PARTIAL';
 
   return {
     spend,
@@ -247,7 +356,53 @@ export function mapMetaInsightsToPerformanceMetrics(insight?: MetaGraphInsightsR
     addToCart,
     initiateCheckout,
     dataAvailability,
+    purchaseActionType,
+    attributionConsistent,
   };
+}
+
+/**
+ * Formats YYYY-MM-DD Meta API date strings into short readable Indonesian dates without timezone drift.
+ */
+function formatMetaDateLabel(dateStr?: string): string {
+  if (!dateStr) return 'N/A';
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr.trim());
+  if (!match) return dateStr;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  const monthIdx = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const monthLabel = months[monthIdx] || match[2];
+  return `${String(day).padStart(2, '0')} ${monthLabel}`;
+}
+
+/**
+ * Maps daily account-level Meta Insights (`time_increment=1`) into DailyTrendPoint[]
+ * preserving null values for unmeasured metrics.
+ */
+export function mapDailyInsightsToTrendPoints(rawInsights?: MetaGraphInsightsRaw[]): DailyTrendPoint[] {
+  if (!rawInsights || !Array.isArray(rawInsights) || rawInsights.length === 0) {
+    return [];
+  }
+
+  const sorted = [...rawInsights].sort((a, b) =>
+    (a.date_start || '').localeCompare(b.date_start || '')
+  );
+
+  return sorted.map((row) => {
+    const mapped = mapMetaInsightsToPerformanceMetrics(row);
+    return {
+      date: formatMetaDateLabel(row.date_start),
+      spend: mapped.spend,
+      revenue: mapped.revenue,
+      roas: mapped.roas,
+      cpa: mapped.cpa,
+      ctr: mapped.ctr,
+      cpc: mapped.cpc,
+      cpm: mapped.cpm,
+      purchases: mapped.purchases,
+      frequency: mapped.frequency,
+    };
+  });
 }
 
 /**

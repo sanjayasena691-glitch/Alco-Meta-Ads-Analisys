@@ -63,6 +63,8 @@ export interface PerformanceMetrics {
   addToCart?: number | null;
   initiateCheckout?: number | null;
   dataAvailability?: DataAvailability;
+  purchaseActionType?: string | null;
+  attributionConsistent?: boolean;
 }
 
 export interface MetricWithComparison {
@@ -134,7 +136,7 @@ export interface AdCreative {
   metrics: PerformanceMetrics;
   previousMetrics: PerformanceMetrics;
   evaluation?: RuleEvaluation;
-  compositeScore?: number; // 0 - 100 based on ROAS, CPA, CTR, Spend, Purchase
+  compositeScore?: number | null; // 0 - 100 based on ROAS, CPA, CTR, Spend, Purchase; null when essential metrics unavailable
   isWinner?: boolean;
 }
 
@@ -225,15 +227,15 @@ export interface AnomalyAlert {
 
 export interface DailyTrendPoint {
   date: string;
-  spend: number;
-  revenue: number;
-  roas: number;
-  cpa: number;
-  ctr: number;
-  cpc: number;
-  cpm: number;
-  purchases: number;
-  frequency: number;
+  spend: number | null;
+  revenue: number | null;
+  roas: number | null;
+  cpa: number | null;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  purchases: number | null;
+  frequency: number | null;
 }
 
 // ==========================================

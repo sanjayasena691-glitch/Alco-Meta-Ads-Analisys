@@ -4,9 +4,10 @@ import {
   AdSet, 
   AdCreative, 
   PerformanceMetrics, 
-  TimePeriod 
+  TimePeriod,
+  DailyTrendPoint
 } from '../../types';
-import { INITIAL_ACCOUNT, INITIAL_CAMPAIGNS } from '../../mock/metaData';
+import { INITIAL_ACCOUNT, INITIAL_CAMPAIGNS, MOCK_TREND_DATA } from '../../mock/metaData';
 import { aggregateMetrics, calculateMetricsFromRaw } from '../../engine/calculations/metrics';
 import { 
   MetaConnectionConfig, 
@@ -19,18 +20,20 @@ import { metaAdsClient, normalizeAdAccountId, MetaApiError } from './metaAdsClie
 import { 
   resolveMetaDateRange, 
   assembleCampaignHierarchy,
-  createUnknownPerformanceMetrics
+  createUnknownPerformanceMetrics,
+  mapMetaInsightsToPerformanceMetrics,
+  mapDailyInsightsToTrendPoints
 } from './metaAdsMapper';
 
 export { type MetaConnectionConfig };
 
 function scaleMetrics(m: PerformanceMetrics, factor: number): PerformanceMetrics {
-  const spend = Math.round(m.spend * factor);
-  const revenue = Math.round(m.revenue * factor);
-  const purchases = Math.max(0, Math.round(m.purchases * factor));
-  const impressions = Math.round(m.impressions * factor);
-  const reach = Math.max(1, Math.round(m.reach * factor));
-  const clicks = Math.round(m.clicks * factor);
+  const spend = m.spend !== null ? Math.round(m.spend * factor) : null;
+  const revenue = m.revenue !== null ? Math.round(m.revenue * factor) : null;
+  const purchases = m.purchases !== null ? Math.max(0, Math.round(m.purchases * factor)) : null;
+  const impressions = m.impressions !== null ? Math.round(m.impressions * factor) : null;
+  const reach = m.reach !== null ? (m.reach === 0 ? 0 : Math.max(1, Math.round(m.reach * factor))) : null;
+  const clicks = m.clicks !== null ? Math.round(m.clicks * factor) : null;
   const linkClicks = m.linkClicks !== undefined && m.linkClicks !== null ? Math.round(m.linkClicks * factor) : m.linkClicks;
   const outboundClicks = m.outboundClicks !== undefined && m.outboundClicks !== null ? Math.round(m.outboundClicks * factor) : m.outboundClicks;
   const landingPageViews = m.landingPageViews !== undefined && m.landingPageViews !== null ? Math.round(m.landingPageViews * factor) : m.landingPageViews;
@@ -96,6 +99,25 @@ export function scaleCampaignsForPeriod(campaigns: Campaign[], period: TimePerio
   }));
 }
 
+function buildMockAccountLevelMetrics(campaigns: Campaign[], period: TimePeriod, isPrevious: boolean): PerformanceMetrics {
+  const factor = getPeriodScaleFactor(period);
+  const totalImpressions = campaigns.reduce(
+    (sum, c) => sum + ((isPrevious ? c.previousMetrics.impressions : c.metrics.impressions) ?? 0),
+    0
+  );
+  // Deduplicated mock account-level reach (distinct from naive sum of campaign reaches)
+  const baseReach = isPrevious ? 31_200 : 34_500;
+  const deduplicatedReach = Math.round(baseReach * factor);
+  return calculateMetricsFromRaw(
+    null,
+    null,
+    null,
+    totalImpressions,
+    deduplicatedReach,
+    null
+  );
+}
+
 class MetaAdsService {
   private currentMockAccount: MetaAdAccount = INITIAL_ACCOUNT;
   private connectionConfig: MetaConnectionConfig = {
@@ -113,6 +135,7 @@ class MetaAdsService {
     campaigns: Campaign[];
     currentMetrics: PerformanceMetrics;
     previousMetrics: PerformanceMetrics;
+    dailyTrend: DailyTrendPoint[];
     period: TimePeriod;
     lastSyncedAt: string;
   } | null = null;
@@ -134,10 +157,19 @@ class MetaAdsService {
       this.realDataSnapshot = null;
     }
 
-    this.connectionConfig = {
+    const updated: MetaConnectionConfig = {
       ...this.connectionConfig,
       ...config,
     };
+
+    if (updated.mode === 'mock') {
+      updated.selectedAdAccountId = config.selectedAdAccountId || this.currentMockAccount.id;
+      updated.selectedAdAccountName = config.selectedAdAccountName || this.currentMockAccount.name;
+      updated.selectedAdAccountCurrency = config.selectedAdAccountCurrency || this.currentMockAccount.currency;
+      updated.selectedAdAccountTimezone = config.selectedAdAccountTimezone || this.currentMockAccount.timezone;
+    }
+
+    this.connectionConfig = updated;
     return { ...this.connectionConfig };
   }
 
@@ -238,6 +270,29 @@ class MetaAdsService {
   }
 
   /**
+   * Synchronous helper for initial Mock Mode account metrics with deduplicated mock account reach.
+   */
+  public getMockBaselineOverview(period: TimePeriod = 'last_7_days'): {
+    current: PerformanceMetrics;
+    previous: PerformanceMetrics;
+    campaigns: Campaign[];
+    dailyTrend: DailyTrendPoint[];
+  } {
+    const scaledCampaigns = scaleCampaignsForPeriod(this.currentMockAccount.campaigns, period);
+    const currentList = scaledCampaigns.map((c) => c.metrics);
+    const previousList = scaledCampaigns.map((c) => c.previousMetrics);
+    const mockAccountCurr = buildMockAccountLevelMetrics(scaledCampaigns, period, false);
+    const mockAccountPrev = buildMockAccountLevelMetrics(scaledCampaigns, period, true);
+
+    return {
+      current: aggregateMetrics(currentList, mockAccountCurr),
+      previous: aggregateMetrics(previousList, mockAccountPrev),
+      campaigns: scaledCampaigns,
+      dailyTrend: MOCK_TREND_DATA,
+    };
+  }
+
+  /**
    * Fetches campaign list.
    */
   public async getCampaigns(period: TimePeriod = 'last_7_days'): Promise<Campaign[]> {
@@ -276,20 +331,19 @@ class MetaAdsService {
     current: PerformanceMetrics;
     previous: PerformanceMetrics;
     campaigns: Campaign[];
+    dailyTrend: DailyTrendPoint[];
     currency: string;
     timezone: string;
     isRealMode: boolean;
   }> {
     // 1. MOCK MODE
     if (this.connectionConfig.mode === 'mock') {
-      const scaledCampaigns = scaleCampaignsForPeriod(this.currentMockAccount.campaigns, period);
-      const currentList = scaledCampaigns.map((c) => c.metrics);
-      const previousList = scaledCampaigns.map((c) => c.previousMetrics);
-
+      const mock = this.getMockBaselineOverview(period);
       return {
-        current: aggregateMetrics(currentList),
-        previous: aggregateMetrics(previousList),
-        campaigns: scaledCampaigns,
+        current: mock.current,
+        previous: mock.previous,
+        campaigns: mock.campaigns,
+        dailyTrend: mock.dailyTrend,
         currency: this.currentMockAccount.currency || 'IDR',
         timezone: this.currentMockAccount.timezone || 'Asia/Jakarta',
         isRealMode: false,
@@ -312,6 +366,7 @@ class MetaAdsService {
         current: this.realDataSnapshot.currentMetrics,
         previous: this.realDataSnapshot.previousMetrics,
         campaigns: this.realDataSnapshot.campaigns,
+        dailyTrend: this.realDataSnapshot.dailyTrend,
         currency: this.connectionConfig.selectedAdAccountCurrency || 'IDR',
         timezone: this.connectionConfig.selectedAdAccountTimezone || 'Asia/Jakarta',
         isRealMode: true,
@@ -330,6 +385,7 @@ class MetaAdsService {
     campaigns: Campaign[];
     current: PerformanceMetrics;
     previous: PerformanceMetrics;
+    dailyTrend: DailyTrendPoint[];
     currency: string;
     timezone: string;
     syncStatus: 'SUCCESS' | 'ERROR' | 'REAUTH_REQUIRED';
@@ -341,9 +397,7 @@ class MetaAdsService {
     try {
       if (this.connectionConfig.mode === 'mock') {
         await new Promise((resolve) => setTimeout(resolve, 350));
-        const scaledCampaigns = scaleCampaignsForPeriod(this.currentMockAccount.campaigns, period);
-        const currentList = scaledCampaigns.map((c) => c.metrics);
-        const previousList = scaledCampaigns.map((c) => c.previousMetrics);
+        const mock = this.getMockBaselineOverview(period);
 
         this.connectionConfig.lastSyncedAt = nowFormatted;
         this.connectionConfig.syncStatus = 'SUCCESS';
@@ -351,9 +405,10 @@ class MetaAdsService {
 
         return {
           lastSyncedAt: nowFormatted,
-          campaigns: scaledCampaigns,
-          current: aggregateMetrics(currentList),
-          previous: aggregateMetrics(previousList),
+          campaigns: mock.campaigns,
+          current: mock.current,
+          previous: mock.previous,
+          dailyTrend: mock.dailyTrend,
           currency: this.currentMockAccount.currency || 'IDR',
           timezone: this.currentMockAccount.timezone || 'Asia/Jakarta',
           syncStatus: 'SUCCESS',
@@ -378,6 +433,7 @@ class MetaAdsService {
         campaigns: res.campaigns,
         current: res.current,
         previous: res.previous,
+        dailyTrend: res.dailyTrend,
         currency: res.currency,
         timezone: res.timezone,
         syncStatus: 'SUCCESS',
@@ -392,6 +448,7 @@ class MetaAdsService {
         campaigns: this.realDataSnapshot?.campaigns || [],
         current: this.realDataSnapshot?.currentMetrics || createUnknownPerformanceMetrics(),
         previous: this.realDataSnapshot?.previousMetrics || createUnknownPerformanceMetrics(),
+        dailyTrend: this.realDataSnapshot?.dailyTrend || [],
         currency: this.connectionConfig.selectedAdAccountCurrency || 'IDR',
         timezone: this.connectionConfig.selectedAdAccountTimezone || 'Asia/Jakarta',
         syncStatus: isAuth ? 'REAUTH_REQUIRED' : 'ERROR',
@@ -411,6 +468,7 @@ class MetaAdsService {
     current: PerformanceMetrics;
     previous: PerformanceMetrics;
     campaigns: Campaign[];
+    dailyTrend: DailyTrendPoint[];
     currency: string;
     timezone: string;
     isRealMode: boolean;
@@ -425,8 +483,11 @@ class MetaAdsService {
       metaAdsClient.getAds(normAccountId, token),
     ]);
 
-    // 2. Fetch Insights in Parallel (Current & Previous for Campaigns, AdSets, Ads)
+    // 2. Fetch Insights in Parallel (Account-level Current/Previous/Daily + Campaigns, AdSets, Ads)
     const [
+      accountInsightsCurr,
+      accountInsightsPrev,
+      accountDailyCurr,
       campInsightsCurr,
       campInsightsPrev,
       adsetInsightsCurr,
@@ -434,6 +495,9 @@ class MetaAdsService {
       adInsightsCurr,
       adInsightsPrev,
     ] = await Promise.all([
+      metaAdsClient.getInsights(normAccountId, token, { level: 'account', dateRange: dateRanges.current }),
+      metaAdsClient.getInsights(normAccountId, token, { level: 'account', dateRange: dateRanges.previous }),
+      metaAdsClient.getInsights(normAccountId, token, { level: 'account', dateRange: dateRanges.current, timeIncrement: 1 }),
       metaAdsClient.getInsights(normAccountId, token, { level: 'campaign', dateRange: dateRanges.current }),
       metaAdsClient.getInsights(normAccountId, token, { level: 'campaign', dateRange: dateRanges.previous }),
       metaAdsClient.getInsights(normAccountId, token, { level: 'adset', dateRange: dateRanges.current }),
@@ -477,8 +541,17 @@ class MetaAdsService {
     const currentMetricsList = mappedCampaigns.map((c) => c.metrics);
     const previousMetricsList = mappedCampaigns.map((c) => c.previousMetrics);
 
-    const aggregatedCurrent = aggregateMetrics(currentMetricsList);
-    const aggregatedPrevious = aggregateMetrics(previousMetricsList);
+    // Authoritative Meta account-level insights for deduplicated Reach & Frequency
+    const accountCurrMetrics = accountInsightsCurr.length > 0
+      ? mapMetaInsightsToPerformanceMetrics(accountInsightsCurr[0])
+      : null;
+    const accountPrevMetrics = accountInsightsPrev.length > 0
+      ? mapMetaInsightsToPerformanceMetrics(accountInsightsPrev[0])
+      : null;
+
+    const aggregatedCurrent = aggregateMetrics(currentMetricsList, accountCurrMetrics);
+    const aggregatedPrevious = aggregateMetrics(previousMetricsList, accountPrevMetrics);
+    const dailyTrend = mapDailyInsightsToTrendPoints(accountDailyCurr);
     const nowFormatted = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 
     // 5. Update Snapshot
@@ -486,6 +559,7 @@ class MetaAdsService {
       campaigns: mappedCampaigns,
       currentMetrics: aggregatedCurrent,
       previousMetrics: aggregatedPrevious,
+      dailyTrend,
       period,
       lastSyncedAt: nowFormatted,
     };
@@ -502,7 +576,7 @@ class MetaAdsService {
         adSets: rawAdSets.length,
         ads: rawAds.length,
       },
-      insightsCount: campInsightsCurr.length + adsetInsightsCurr.length + adInsightsCurr.length,
+      insightsCount: accountInsightsCurr.length + campInsightsCurr.length + adsetInsightsCurr.length + adInsightsCurr.length,
       missingFields: [],
     };
 
@@ -510,6 +584,7 @@ class MetaAdsService {
       current: aggregatedCurrent,
       previous: aggregatedPrevious,
       campaigns: mappedCampaigns,
+      dailyTrend,
       currency: this.connectionConfig.selectedAdAccountCurrency || 'IDR',
       timezone: this.connectionConfig.selectedAdAccountTimezone || 'Asia/Jakarta',
       isRealMode: true,

@@ -40,11 +40,18 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
     };
   });
 
-  // Sort descending by composite score
-  const sorted = [...scoredCreatives].sort((a, b) => (b.compositeScore || 0) - (a.compositeScore || 0));
+  // Sort descending by composite score, keeping unscored (null) creatives at the end
+  const sorted = [...scoredCreatives].sort((a, b) => {
+    if (a.compositeScore === null && b.compositeScore === null) return 0;
+    if (a.compositeScore === null) return 1;
+    if (b.compositeScore === null) return -1;
+    return b.compositeScore - a.compositeScore;
+  });
 
-  const topPerformers = sorted.filter((ad) => (ad.compositeScore || 0) >= 65);
-  const underperformers = sorted.filter((ad) => (ad.compositeScore || 0) < 65 || ad.status === 'PROBLEM');
+  const topPerformers = sorted.filter((ad) => ad.compositeScore !== null && ad.compositeScore >= 65);
+  const underperformers = sorted.filter(
+    (ad) => (ad.compositeScore !== null && ad.compositeScore < 65) || ad.status === 'PROBLEM'
+  );
 
   const displayedList = activeTab === 'top' 
     ? topPerformers 
@@ -116,7 +123,7 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
       {/* Creative Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {displayedList.map((ad, index) => {
-          const isWinner = (ad.compositeScore || 0) >= 70;
+          const isWinner = ad.compositeScore !== null && ad.compositeScore >= 70;
           const isFatigueRisk =
             ad.metrics.frequency !== null &&
             ad.metrics.frequency >= 3.0 &&
@@ -205,7 +212,7 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
                   <span>Spend: <strong className="text-slate-800">{formatRupiah(ad.metrics.spend)}</strong></span>
                   <span>Purchases: <strong className="text-slate-800">{ad.metrics.purchases !== null ? `${ad.metrics.purchases} order` : 'N/A'}</strong></span>
                   <span>Freq: <strong className="text-slate-800">{formatFrequency(ad.metrics.frequency)}</strong></span>
-                  <span>Composite: <strong className="text-indigo-600">{ad.compositeScore}/100</strong></span>
+                  <span>Composite: <strong className="text-indigo-600">{ad.compositeScore !== null ? `${ad.compositeScore}/100` : 'N/A'}</strong></span>
                 </div>
               </div>
 

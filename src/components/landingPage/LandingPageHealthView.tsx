@@ -26,6 +26,7 @@ import { formatRupiah } from '../../utils/formatters';
 interface LandingPageHealthViewProps {
   landingPages: LandingPageWithMetrics[];
   clarityConfig: ClarityConnectionConfig;
+  metaMode?: 'mock' | 'real';
   availableCampaigns: Campaign[];
   onRefreshClarity: () => void;
   isSyncingClarity: boolean;
@@ -37,6 +38,7 @@ interface LandingPageHealthViewProps {
 export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
   landingPages,
   clarityConfig,
+  metaMode = 'mock',
   availableCampaigns,
   onRefreshClarity,
   isSyncingClarity,
@@ -47,15 +49,21 @@ export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [mappingModalLp, setMappingModalLp] = useState<LandingPageWithMetrics | null>(null);
 
-  // Calculate aggregated stats
-  const totalSessions = landingPages.reduce((acc, lp) => acc + lp.metrics.sessions, 0);
-  const avgScroll = landingPages.length > 0 
+  const isClarityIsolated = metaMode === 'real' && clarityConfig.isMockMode && landingPages.length === 0;
+  const hasPages = landingPages.length > 0;
+
+  // Calculate aggregated stats (N/A when isolated or no pages)
+  const totalSessions = hasPages ? landingPages.reduce((acc, lp) => acc + lp.metrics.sessions, 0) : null;
+  const avgScroll = hasPages
     ? Math.round(landingPages.reduce((acc, lp) => acc + lp.metrics.avgScrollDepth, 0) / landingPages.length)
-    : 0;
-  const totalQuickBacks = landingPages.reduce((acc, lp) => acc + lp.metrics.quickBacks, 0);
-  const quickBackRate = totalSessions > 0 ? ((totalQuickBacks / totalSessions) * 100).toFixed(1) : '0';
-  const totalScriptErrors = landingPages.reduce((acc, lp) => acc + lp.metrics.scriptErrors, 0);
-  const totalRageClicks = landingPages.reduce((acc, lp) => acc + lp.metrics.rageClicks, 0);
+    : null;
+  const totalQuickBacks = hasPages ? landingPages.reduce((acc, lp) => acc + lp.metrics.quickBacks, 0) : null;
+  const quickBackRate =
+    totalSessions !== null && totalSessions > 0 && totalQuickBacks !== null
+      ? ((totalQuickBacks / totalSessions) * 100).toFixed(1)
+      : null;
+  const totalScriptErrors = hasPages ? landingPages.reduce((acc, lp) => acc + lp.metrics.scriptErrors, 0) : null;
+  const totalRageClicks = hasPages ? landingPages.reduce((acc, lp) => acc + lp.metrics.rageClicks, 0) : null;
 
   // Evaluations for each landing page
   const evaluatedPages = landingPages.map((lp) => {
@@ -112,12 +120,19 @@ export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base sm:text-lg font-extrabold text-gray-900">
-                  Landing Page Intelligence & Clarity
+                  Landing Page Intelligence &amp; Clarity
                 </h2>
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>Clarity Active Sync</span>
-                </span>
+                {isClarityIsolated ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                    <AlertCircle className="w-3 h-3" />
+                    <span>Terisolasi di Real Mode (Mock Excluded)</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>{clarityConfig.isMockMode ? 'Clarity Mock Active' : 'Clarity Active Sync'}</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-gray-500 mt-1 max-w-2xl">
                 Mendeteksi apakah penurunan konversi bersumber dari <strong>kebocoran teknis loading</strong>, 
@@ -130,7 +145,7 @@ export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
             <button
               type="button"
               onClick={onRefreshClarity}
-              disabled={isSyncingClarity}
+              disabled={isSyncingClarity || isClarityIsolated}
               className="flex items-center gap-2 px-3.5 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-xs font-bold shadow-xs disabled:opacity-50 transition-colors cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncingClarity ? 'animate-spin text-blue-400' : ''}`} />
@@ -147,38 +162,55 @@ export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
           </div>
         )}
 
+        {/* Real Mode Mock Isolation Notice */}
+        {isClarityIsolated && (
+          <div className="mt-4 p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-amber-900 text-xs">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold block">Data Mock Clarity Dinonaktifkan di Real Mode</span>
+              <span className="text-amber-800">
+                Untuk menjaga akurasi diagnosis Meta Ads nyata, data simulasi (mock) Microsoft Clarity tidak dicampurkan ke Funnel Diagnosis maupun AI Analyst. Semua metrik telemetri landing page ditampilkan sebagai N/A hingga API Clarity nyata dihubungkan.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Behavioral Summary Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5 pt-4 border-t border-gray-100">
           <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
             <span className="text-[11px] text-gray-500 block font-medium">Total Sesi Visitor</span>
             <span className="text-lg sm:text-xl font-bold text-gray-900 mt-0.5 block">
-              {totalSessions.toLocaleString('id-ID')}
+              {totalSessions !== null ? totalSessions.toLocaleString('id-ID') : 'N/A'}
             </span>
             <span className="text-[10px] text-gray-400">Dari seluruh landing page</span>
           </div>
 
           <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
             <span className="text-[11px] text-gray-500 block font-medium">Rata-rata Scroll Depth</span>
-            <span className={`text-lg sm:text-xl font-bold mt-0.5 block ${avgScroll >= 50 ? 'text-emerald-700' : 'text-amber-700'}`}>
-              {avgScroll}%
+            <span className={`text-lg sm:text-xl font-bold mt-0.5 block ${avgScroll === null ? 'text-gray-900' : avgScroll >= 50 ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {avgScroll !== null ? `${avgScroll}%` : 'N/A'}
             </span>
             <span className="text-[10px] text-gray-400">Standar e-commerce: 50%+</span>
           </div>
 
           <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
             <span className="text-[11px] text-gray-500 block font-medium">Quick Backs (&lt; 5s)</span>
-            <span className={`text-lg sm:text-xl font-bold mt-0.5 block ${Number(quickBackRate) > 30 ? 'text-red-700' : 'text-gray-900'}`}>
-              {quickBackRate}%
+            <span className={`text-lg sm:text-xl font-bold mt-0.5 block ${quickBackRate !== null && Number(quickBackRate) > 30 ? 'text-red-700' : 'text-gray-900'}`}>
+              {quickBackRate !== null ? `${quickBackRate}%` : 'N/A'}
             </span>
-            <span className="text-[10px] text-gray-400">{totalQuickBacks} sesi langsung keluar</span>
+            <span className="text-[10px] text-gray-400">
+              {totalQuickBacks !== null ? `${totalQuickBacks} sesi langsung keluar` : 'Telemetri belum tersedia'}
+            </span>
           </div>
 
           <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
             <span className="text-[11px] text-gray-500 block font-medium">Kendala Teknis (Errors)</span>
-            <span className={`text-lg sm:text-xl font-bold mt-0.5 block ${totalScriptErrors > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
-              {totalScriptErrors} Script Errors
+            <span className={`text-lg sm:text-xl font-bold mt-0.5 block ${totalScriptErrors === null ? 'text-gray-900' : totalScriptErrors > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+              {totalScriptErrors !== null ? `${totalScriptErrors} Script Errors` : 'N/A'}
             </span>
-            <span className="text-[10px] text-gray-400">{totalRageClicks} rage clicks terdeteksi</span>
+            <span className="text-[10px] text-gray-400">
+              {totalRageClicks !== null ? `${totalRageClicks} rage clicks terdeteksi` : 'Telemetri belum tersedia'}
+            </span>
           </div>
         </div>
       </div>
@@ -209,6 +241,13 @@ export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
 
       {/* Landing Pages Cards List */}
       <div className="space-y-4">
+        {filteredPages.length === 0 && (
+          <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center text-xs text-gray-500">
+            {isClarityIsolated
+              ? 'Tidak ada data landing page nyata yang terhubung pada Real Mode (data simulasi mock Clarity disembunyikan).'
+              : 'Tidak ada landing page yang cocok dengan filter status saat ini.'}
+          </div>
+        )}
         {filteredPages.map((lp) => {
           const { profile, metrics, evaluation } = lp;
           const statusBadge = getStatusBadge(evaluation.status);

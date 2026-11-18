@@ -11,10 +11,11 @@ import {
   Legend,
 } from 'recharts';
 import { DailyTrendPoint } from '../../types';
-import { formatRupiah, formatNumber, formatRoas, formatPercent } from '../../utils/formatters';
+import { formatRupiah, formatNumber, formatRoas, formatPercent, formatFrequency } from '../../utils/formatters';
 
 interface TrendPerformanceChartProps {
   data: DailyTrendPoint[];
+  isRealMode?: boolean;
 }
 
 type ChartMetricMode =
@@ -27,7 +28,7 @@ type ChartMetricMode =
   | 'purchases'
   | 'frequency';
 
-export const TrendPerformanceChart: React.FC<TrendPerformanceChartProps> = ({ data }) => {
+export const TrendPerformanceChart: React.FC<TrendPerformanceChartProps> = ({ data, isRealMode = false }) => {
   const [metricMode, setMetricMode] = useState<ChartMetricMode>('spend_revenue');
 
   const metricButtons: { id: ChartMetricMode; label: string }[] = [
@@ -41,6 +42,8 @@ export const TrendPerformanceChart: React.FC<TrendPerformanceChartProps> = ({ da
     { id: 'frequency', label: 'Frequency' },
   ];
 
+  const hasTrendPoints = Array.isArray(data) && data.length > 0;
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-xs">
       {/* Header & Metric Selector */}
@@ -50,7 +53,9 @@ export const TrendPerformanceChart: React.FC<TrendPerformanceChartProps> = ({ da
             Trend Performa Harian
           </h3>
           <p className="text-xs text-gray-500">
-            Pola pergerakan efisiensi biaya dan omzet iklan Meta Ads
+            {isRealMode
+              ? 'Pola harian langsung dari Meta Marketing API (time_increment=1)'
+              : 'Pola pergerakan efisiensi biaya dan omzet iklan Meta Ads'}
           </p>
         </div>
 
@@ -73,106 +78,133 @@ export const TrendPerformanceChart: React.FC<TrendPerformanceChartProps> = ({ da
         </div>
       </div>
 
-      {/* Chart Canvas */}
-      <div className="h-72 w-full pt-2">
-        <ResponsiveContainer width="100%" height="100%">
-          {metricMode === 'spend_revenue' ? (
-            <ComposedChart data={data} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-              <XAxis dataKey="date" stroke="#9ca3af" fontSize={11} tickLine={false} />
-              <YAxis
-                stroke="#9ca3af"
-                fontSize={11}
-                tickLine={false}
-                tickFormatter={(val) => formatRupiah(val, true)}
-              />
-              <Tooltip
-                content={({ active, payload, label }) => {
-                  if (active && payload && payload.length) {
-                    const spendVal = payload.find((p) => p.dataKey === 'spend')?.value as number;
-                    const revVal = payload.find((p) => p.dataKey === 'revenue')?.value as number;
-                    return (
-                      <div className="bg-gray-900 text-white p-3 rounded-lg shadow-xl text-xs space-y-1">
-                        <div className="font-bold text-gray-300 pb-1 border-b border-gray-800">{label}</div>
-                        <div className="text-indigo-300">Spend: {formatRupiah(spendVal)}</div>
-                        <div className="text-emerald-400">Revenue: {formatRupiah(revVal)}</div>
-                        <div className="text-amber-300 font-semibold pt-1 border-t border-gray-800">
-                          ROAS: {spendVal > 0 ? (revVal / spendVal).toFixed(2) : 0}x
+      {/* Chart Canvas or N/A Unavailable State */}
+      {!hasTrendPoints ? (
+        <div className="h-72 w-full rounded-xl bg-gray-50 border border-dashed border-gray-200 flex flex-col items-center justify-center text-center px-4">
+          <span className="text-lg font-bold text-gray-400">N/A</span>
+          <p className="text-xs font-semibold text-gray-600 mt-1">
+            Data tren harian belum tersedia untuk periode atau akun ini.
+          </p>
+          <p className="text-[11px] text-gray-400 mt-0.5 max-w-md">
+            Grafik hanya menampilkan deret waktu nyata dari Meta Graph API tanpa menggunakan data simulasi atau angka palsu.
+          </p>
+        </div>
+      ) : (
+        <div className="h-72 w-full pt-2">
+          <ResponsiveContainer width="100%" height="100%">
+            {metricMode === 'spend_revenue' ? (
+              <ComposedChart data={data} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                <XAxis dataKey="date" stroke="#9ca3af" fontSize={11} tickLine={false} />
+                <YAxis
+                  stroke="#9ca3af"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(val) => formatRupiah(val, true)}
+                />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (active && payload && payload.length) {
+                      const row = payload[0]?.payload as DailyTrendPoint | undefined;
+                      const spendVal = row?.spend ?? null;
+                      const revVal = row?.revenue ?? null;
+                      const roasDisplay =
+                        spendVal !== null && spendVal > 0 && revVal !== null
+                          ? `${(revVal / spendVal).toFixed(2)}x`
+                          : 'N/A';
+                      return (
+                        <div className="bg-gray-900 text-white p-3 rounded-lg shadow-xl text-xs space-y-1">
+                          <div className="font-bold text-gray-300 pb-1 border-b border-gray-800">{label}</div>
+                          <div className="text-indigo-300">Spend: {formatRupiah(spendVal)}</div>
+                          <div className="text-emerald-400">Revenue: {formatRupiah(revVal)}</div>
+                          <div className="text-amber-300 font-semibold pt-1 border-t border-gray-800">
+                            ROAS: {roasDisplay}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  }
-                  return null;
-                }}
-              />
-              <Legend
-                verticalAlign="top"
-                align="right"
-                wrapperStyle={{ paddingBottom: '10px', fontSize: '12px' }}
-              />
-              <Bar dataKey="spend" name="Spend" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={32} />
-              <Line
-                type="monotone"
-                dataKey="revenue"
-                name="Revenue"
-                stroke="#10b981"
-                strokeWidth={2.5}
-                dot={{ r: 3.5, fill: '#10b981' }}
-              />
-            </ComposedChart>
-          ) : (
-            <ComposedChart data={data} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-              <XAxis dataKey="date" stroke="#9ca3af" fontSize={11} tickLine={false} />
-              <YAxis
-                stroke="#9ca3af"
-                fontSize={11}
-                tickLine={false}
-                tickFormatter={(val) => {
-                  if (metricMode === 'cpa' || metricMode === 'cpc' || metricMode === 'cpm') {
-                    return formatRupiah(val, true);
-                  }
-                  if (metricMode === 'ctr') return `${val}%`;
-                  if (metricMode === 'roas') return `${val}x`;
-                  return `${val}`;
-                }}
-              />
-              <Tooltip
-                content={({ active, payload, label }) => {
-                  if (active && payload && payload.length) {
-                    const val = payload[0].value as number;
-                    let display = `${val}`;
-                    if (metricMode === 'cpa' || metricMode === 'cpc' || metricMode === 'cpm') {
-                      display = formatRupiah(val);
-                    } else if (metricMode === 'ctr') {
-                      display = `${val}%`;
-                    } else if (metricMode === 'roas') {
-                      display = formatRoas(val);
+                      );
                     }
-                    return (
-                      <div className="bg-gray-900 text-white p-2.5 rounded-lg shadow-xl text-xs">
-                        <div className="font-semibold text-gray-400">{label}</div>
-                        <div className="font-bold text-indigo-300 mt-1">
-                          {payload[0].name}: {display}
+                    return null;
+                  }}
+                />
+                <Legend
+                  verticalAlign="top"
+                  align="right"
+                  wrapperStyle={{ paddingBottom: '10px', fontSize: '12px' }}
+                />
+                <Bar dataKey="spend" name="Spend" fill="#6366f1" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                <Line
+                  type="monotone"
+                  dataKey="revenue"
+                  name="Revenue"
+                  stroke="#10b981"
+                  strokeWidth={2.5}
+                  dot={{ r: 3.5, fill: '#10b981' }}
+                  connectNulls={false}
+                />
+              </ComposedChart>
+            ) : (
+              <ComposedChart data={data} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
+                <XAxis dataKey="date" stroke="#9ca3af" fontSize={11} tickLine={false} />
+                <YAxis
+                  stroke="#9ca3af"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(val) => {
+                    if (val === null || val === undefined) return 'N/A';
+                    if (metricMode === 'cpa' || metricMode === 'cpc' || metricMode === 'cpm') {
+                      return formatRupiah(val, true);
+                    }
+                    if (metricMode === 'ctr') return `${val}%`;
+                    if (metricMode === 'roas') return `${val}x`;
+                    return `${val}`;
+                  }}
+                />
+                <Tooltip
+                  content={({ active, payload, label }) => {
+                    if (active && payload && payload.length) {
+                      const row = payload[0]?.payload as DailyTrendPoint | undefined;
+                      const val = row ? row[metricMode] : null;
+                      let display = 'N/A';
+                      if (val !== null && val !== undefined) {
+                        if (metricMode === 'cpa' || metricMode === 'cpc' || metricMode === 'cpm') {
+                          display = formatRupiah(val);
+                        } else if (metricMode === 'ctr') {
+                          display = formatPercent(val, false, 2);
+                        } else if (metricMode === 'roas') {
+                          display = formatRoas(val);
+                        } else if (metricMode === 'frequency') {
+                          display = formatFrequency(val);
+                        } else {
+                          display = formatNumber(val);
+                        }
+                      }
+                      return (
+                        <div className="bg-gray-900 text-white p-2.5 rounded-lg shadow-xl text-xs">
+                          <div className="font-semibold text-gray-400">{label}</div>
+                          <div className="font-bold text-indigo-300 mt-1">
+                            {payload[0].name}: {display}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  }
-                  return null;
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey={metricMode}
-                name={metricButtons.find((b) => b.id === metricMode)?.label || metricMode}
-                stroke="#4f46e5"
-                strokeWidth={2.5}
-                dot={{ r: 3.5, fill: '#4f46e5' }}
-              />
-            </ComposedChart>
-          )}
-        </ResponsiveContainer>
-      </div>
+                      );
+                    }
+                    return null;
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey={metricMode}
+                  name={metricButtons.find((b) => b.id === metricMode)?.label || metricMode}
+                  stroke="#4f46e5"
+                  strokeWidth={2.5}
+                  dot={{ r: 3.5, fill: '#4f46e5' }}
+                  connectNulls={false}
+                />
+              </ComposedChart>
+            )}
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 };

@@ -148,7 +148,7 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
 
     onUpdateConfig(updated);
 
-    if (onUpdateClarityConfig) {
+    if (onUpdateClarityConfig && mode === 'mock') {
       onUpdateClarityConfig({
         projectId: clarityProjectId,
         apiToken: clarityApiToken,
@@ -538,14 +538,21 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
               <Globe className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base sm:text-lg font-bold text-gray-900">
                   Microsoft Clarity (Landing Page Intelligence)
                 </h2>
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>Mock Service Active</span>
-                </span>
+                {config.mode === 'real' && (clarityConfig?.isMockMode ?? true) ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                    <AlertTriangle className="w-3 h-3" />
+                    <span>Terisolasi di Real Mode (Mock Only)</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>Mock Service Active</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-gray-500 mt-1 max-w-xl leading-relaxed">
                 Menyediakan metrik perilaku pengunjung (scroll depth, quick backs, rage clicks, dan script errors) 

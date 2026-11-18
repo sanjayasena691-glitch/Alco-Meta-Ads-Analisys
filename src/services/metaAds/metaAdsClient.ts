@@ -204,6 +204,7 @@ class MetaAdsClient {
     params: {
       level?: 'account' | 'campaign' | 'adset' | 'ad';
       dateRange: MetaDateRange;
+      timeIncrement?: number | 'all_days';
     }
   ): Promise<MetaGraphInsightsRaw[]> {
     const normId = entityId.startsWith('act_') ? normalizeAdAccountId(entityId) : entityId;
@@ -215,6 +216,8 @@ class MetaAdsClient {
     const url = this.buildUrl(`${normId}/insights`, {
       level: params.level || 'campaign',
       time_range: timeRangeJson,
+      time_increment: params.timeIncrement,
+      use_account_attribution_setting: true,
       fields: [
         'account_id',
         'campaign_id',

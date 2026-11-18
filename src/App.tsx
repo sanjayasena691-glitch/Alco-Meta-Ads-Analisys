@@ -30,14 +30,17 @@ import {
   HealthStatus, 
   AnomalyAlert, 
   RecommendationCardItem,
-  StructuredAiAnalysis
+  StructuredAiAnalysis,
+  DailyTrendPoint,
+  PerformanceMetrics
 } from './types';
-import { DEFAULT_BUSINESS_TARGETS, MOCK_TREND_DATA, INITIAL_CAMPAIGNS } from './mock/metaData';
+import { DEFAULT_BUSINESS_TARGETS, INITIAL_ACCOUNT } from './mock/metaData';
 import { metaAdsService } from './services/metaAds/metaAdsService';
+import { createUnknownPerformanceMetrics } from './services/metaAds/metaAdsMapper';
 import { clarityService } from './services/clarity/clarityService';
 import { 
-  aggregateMetrics, 
-  calculatePeriodMetricsSummary 
+  calculatePeriodMetricsSummary,
+  calculatePercentChange
 } from './engine/calculations/metrics';
 import { 
   evaluateEntityHealth, 
@@ -48,6 +51,8 @@ import { diagnoseFunnel } from './engine/funnel/funnelDiagnosisEngine';
 import { requestAiDiagnosis } from './services/ai/aiAnalystService';
 
 export default function App() {
+  const initialBaseline = useMemo(() => metaAdsService.getMockBaselineOverview('last_7_days'), []);
+
   // Navigation State
   const [currentTab, setCurrentTab] = useState<NavTab>('overview');
   const [currentPeriod, setCurrentPeriod] = useState<TimePeriod>('last_7_days');
@@ -55,8 +60,11 @@ export default function App() {
   // Business Target State
   const [targets, setTargets] = useState<BusinessTargets>(DEFAULT_BUSINESS_TARGETS);
 
-  // Campaigns & Meta Integration State
-  const [campaigns, setCampaigns] = useState<Campaign[]>(INITIAL_CAMPAIGNS);
+  // Campaigns, Account Metrics, Trend & Meta Integration State
+  const [campaigns, setCampaigns] = useState<Campaign[]>(initialBaseline.campaigns);
+  const [accountCurrentMetrics, setAccountCurrentMetrics] = useState<PerformanceMetrics>(initialBaseline.current);
+  const [accountPreviousMetrics, setAccountPreviousMetrics] = useState<PerformanceMetrics>(initialBaseline.previous);
+  const [trendData, setTrendData] = useState<DailyTrendPoint[]>(initialBaseline.dailyTrend);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string>(
     new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
@@ -78,59 +86,97 @@ export default function App() {
   const [overviewAiDiagnosis, setOverviewAiDiagnosis] = useState<StructuredAiAnalysis | null>(null);
   const [isLoadingOverviewAi, setIsLoadingOverviewAi] = useState<boolean>(false);
 
-  // Derived Metrics & Rule Engine Evaluations
-  const currentMetricsList = useMemo(() => campaigns.map((c) => c.metrics), [campaigns]);
-  const previousMetricsList = useMemo(() => campaigns.map((c) => c.previousMetrics), [campaigns]);
+  // Explicit MOCK / REAL Isolation:
+  // Mock Clarity data MUST NEVER participate in Real Mode diagnosis, funnel, recommendations, alerts, or AI context.
+  const effectiveLandingPages = useMemo(() => {
+    if (metaConfig.mode === 'real' && clarityConfig.isMockMode) {
+      return [];
+    }
+    return landingPages;
+  }, [metaConfig.mode, clarityConfig.isMockMode, landingPages]);
 
-  const aggregatedCurrent = useMemo(() => aggregateMetrics(currentMetricsList), [currentMetricsList]);
-  const aggregatedPrevious = useMemo(() => aggregateMetrics(previousMetricsList), [previousMetricsList]);
+  const activeAccountName = useMemo(() => {
+    if (metaConfig.mode === 'real') {
+      return metaConfig.selectedAdAccountName || metaConfig.selectedAdAccountId || 'Real Meta Ad Account';
+    }
+    return INITIAL_ACCOUNT.name;
+  }, [metaConfig.mode, metaConfig.selectedAdAccountName, metaConfig.selectedAdAccountId]);
 
   const metricsSummary = useMemo(() => {
-    return calculatePeriodMetricsSummary(aggregatedCurrent, aggregatedPrevious, targets);
-  }, [aggregatedCurrent, aggregatedPrevious, targets]);
+    return calculatePeriodMetricsSummary(accountCurrentMetrics, accountPreviousMetrics, targets);
+  }, [accountCurrentMetrics, accountPreviousMetrics, targets]);
 
   const accountEvaluation = useMemo(() => {
-    return evaluateEntityHealth(aggregatedCurrent, aggregatedPrevious, targets);
-  }, [aggregatedCurrent, aggregatedPrevious, targets]);
+    return evaluateEntityHealth(accountCurrentMetrics, accountPreviousMetrics, targets);
+  }, [accountCurrentMetrics, accountPreviousMetrics, targets]);
 
-  // End-to-End Funnel Diagnosis (Meta Ads + Clarity Landing Pages)
+  // End-to-End Funnel Diagnosis (Meta Ads + isolated Landing Pages)
   const funnelDiagnosis = useMemo(() => {
     const activeCampaignIds = campaigns.map((c) => c.id);
-    return diagnoseFunnel(aggregatedCurrent, landingPages, targets, aggregatedPrevious, activeCampaignIds);
-  }, [aggregatedCurrent, landingPages, targets, aggregatedPrevious, campaigns]);
+    return diagnoseFunnel(accountCurrentMetrics, effectiveLandingPages, targets, accountPreviousMetrics, activeCampaignIds);
+  }, [accountCurrentMetrics, effectiveLandingPages, targets, accountPreviousMetrics, campaigns]);
 
-  // Recommendations & Alerts
+  // Recommendations & Alerts (isolated from mock Clarity when in Real Mode)
   const allRecommendations = useMemo(() => {
-    return generateRecommendationsFromCampaigns(campaigns, targets);
-  }, [campaigns, targets]);
+    return generateRecommendationsFromCampaigns(campaigns, targets, effectiveLandingPages, funnelDiagnosis);
+  }, [campaigns, targets, effectiveLandingPages, funnelDiagnosis]);
 
   const allAlerts = useMemo(() => {
-    return generateAlertsFromCampaigns(campaigns, targets);
-  }, [campaigns, targets]);
+    return generateAlertsFromCampaigns(campaigns, targets, effectiveLandingPages);
+  }, [campaigns, targets, effectiveLandingPages]);
 
   // All Creatives List for Creative Ranking View
   const allCreatives = useMemo(() => {
     return campaigns.flatMap((c) => c.adSets.flatMap((as) => as.ads));
   }, [campaigns]);
 
-  // Priority Issue for Account Health Banner (e.g. Creative Fatigue on Video 03)
+  // Priority Issue for Account Health Banner (e.g. Creative Fatigue with real calculated deltas)
   const priorityFatiguedAd = useMemo(() => {
     return allCreatives.find(
       (ad) => ad.status === 'PROBLEM' && ad.metrics.frequency !== null && ad.metrics.frequency >= 3.0
     );
   }, [allCreatives]);
 
+  const priorityFatiguedChanges = useMemo(() => {
+    if (!priorityFatiguedAd) return [];
+    const ctrDelta = calculatePercentChange(priorityFatiguedAd.metrics.ctr, priorityFatiguedAd.previousMetrics.ctr);
+    const freqDelta = calculatePercentChange(priorityFatiguedAd.metrics.frequency, priorityFatiguedAd.previousMetrics.frequency);
+    return [
+      {
+        label: 'CTR',
+        change: ctrDelta !== null ? `${ctrDelta >= 0 ? '↑' : '↓'} ${Math.abs(ctrDelta).toFixed(0)}%` : 'N/A',
+        isNegative: ctrDelta !== null ? ctrDelta < 0 : false,
+      },
+      {
+        label: 'Frequency',
+        change: freqDelta !== null ? `${freqDelta >= 0 ? '↑' : '↓'} ${Math.abs(freqDelta).toFixed(0)}%` : 'N/A',
+        isNegative: freqDelta !== null ? freqDelta > 0 : false,
+      },
+    ];
+  }, [priorityFatiguedAd]);
+
   // Sync / Refresh Handler for Meta Ads
   const handleRefreshData = async (): Promise<{ syncStatus: string; errorMessage?: string }> => {
     setIsSyncing(true);
     try {
       const res = await metaAdsService.refreshInsights(currentPeriod);
+      const updatedCfg = metaAdsService.getConnectionConfig();
       setLastSyncedAt(res.lastSyncedAt);
       setCampaigns(res.campaigns);
-      setMetaConfig(metaAdsService.getConnectionConfig());
+      setAccountCurrentMetrics(res.current);
+      setAccountPreviousMetrics(res.previous);
+      setTrendData(res.dailyTrend);
+      setMetaConfig(updatedCfg);
+      if (updatedCfg.mode === 'mock') {
+        const mockLps = await clarityService.getLandingPages(currentPeriod, 'mock');
+        setLandingPages(mockLps);
+      }
       return { syncStatus: res.syncStatus, errorMessage: res.errorMessage };
     } catch (err: any) {
       setCampaigns([]);
+      setAccountCurrentMetrics(createUnknownPerformanceMetrics());
+      setAccountPreviousMetrics(createUnknownPerformanceMetrics());
+      setTrendData([]);
       setMetaConfig(metaAdsService.getConnectionConfig());
       return { syncStatus: 'ERROR', errorMessage: err?.message || 'Gagal menyinkronkan data Meta Ads.' };
     } finally {
@@ -138,34 +184,47 @@ export default function App() {
     }
   };
 
-  // Change Period Handler - Correctly updates campaign & landing page state
+  // Change Period Handler - Correctly isolates mock vs real state
   const handleSelectPeriod = async (period: TimePeriod) => {
     setCurrentPeriod(period);
     setIsSyncing(true);
     try {
+      const activeMode = metaAdsService.getConnectionConfig().mode;
       const [insights, scaledLps] = await Promise.all([
         metaAdsService.getInsights(period),
-        clarityService.getLandingPages(period)
+        clarityService.getLandingPages(period, activeMode)
       ]);
       setCampaigns(insights.campaigns);
+      setAccountCurrentMetrics(insights.current);
+      setAccountPreviousMetrics(insights.previous);
+      setTrendData(insights.dailyTrend);
       setLandingPages(scaledLps);
       setMetaConfig(metaAdsService.getConnectionConfig());
       setLastSyncedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
       setIsSyncing(false);
     } catch {
+      const activeMode = metaAdsService.getConnectionConfig().mode;
+      if (activeMode === 'real') {
+        setCampaigns([]);
+        setAccountCurrentMetrics(createUnknownPerformanceMetrics());
+        setAccountPreviousMetrics(createUnknownPerformanceMetrics());
+        setTrendData([]);
+      }
       setMetaConfig(metaAdsService.getConnectionConfig());
       setIsSyncing(false);
     }
   };
 
-  // Refresh Clarity Data Handler
+  // Refresh Clarity Data Handler (isolated when in Real Mode)
   const handleRefreshClarity = async () => {
     setIsSyncingClarity(true);
     try {
-      const res = await clarityService.refreshData();
+      const res = await clarityService.refreshData(currentPeriod, metaConfig.mode);
       setLandingPages(res.landingPages);
       setClarityConfig(clarityService.getConnectionConfig());
-      if (res.isRateLimited) {
+      if (metaConfig.mode === 'real' && clarityConfig.isMockMode) {
+        setClaritySyncNotice(res.message);
+      } else if (res.isRateLimited) {
         setClaritySyncNotice('Rate limit cooldown aktif (Clarity API standard). Data disajikan dari cache lokal.');
       } else {
         setClaritySyncNotice('Data Clarity berhasil disinkronkan langsung.');
@@ -192,10 +251,10 @@ export default function App() {
     setIsAiModalOpen(true);
   };
 
-  // Synchronize Overview AI Analysis with Meta & Landing Page data changes without infinite requests
+  // Synchronize Overview AI Analysis with Meta & isolated Landing Page data changes without infinite requests
   const aiSyncKey = useMemo(() => {
-    return `${currentPeriod}_${lastSyncedAt}_${targets.targetCpa}_${targets.targetRoas}_${campaigns.reduce((acc, c) => acc + (c.metrics.spend ?? 0), 0)}`;
-  }, [currentPeriod, lastSyncedAt, targets.targetCpa, targets.targetRoas, campaigns]);
+    return `${metaConfig.mode}_${metaConfig.syncStatus}_${currentPeriod}_${lastSyncedAt}_${targets.targetCpa}_${targets.targetRoas}_${campaigns.reduce((acc, c) => acc + (c.metrics.spend ?? 0), 0)}`;
+  }, [metaConfig.mode, metaConfig.syncStatus, currentPeriod, lastSyncedAt, targets.targetCpa, targets.targetRoas, campaigns]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -204,14 +263,14 @@ export default function App() {
       try {
         const diagnosis = await requestAiDiagnosis({
           entityId: 'account_overview',
-          entityName: 'ALCO Digital Academy Account',
+          entityName: activeAccountName,
           entityType: 'account',
-          metrics: aggregatedCurrent,
-          previousMetrics: aggregatedPrevious,
+          metrics: accountCurrentMetrics,
+          previousMetrics: accountPreviousMetrics,
           evaluation: accountEvaluation,
           targets,
           funnelEvaluation: funnelDiagnosis,
-          landingPageMetrics: landingPages[0]?.metrics,
+          landingPageMetrics: effectiveLandingPages[0]?.metrics,
         });
         if (!isCancelled) {
           setOverviewAiDiagnosis(diagnosis);
@@ -256,7 +315,7 @@ export default function App() {
               setAiModalEntity(null);
               setIsAiModalOpen(true);
             }}
-            accountName="ALCO Digital Academy"
+            accountName={activeAccountName}
           />
 
           {/* Main View Area */}
@@ -302,7 +361,7 @@ export default function App() {
                     setAiModalEntity({
                       name: 'Account Health',
                       type: 'account',
-                      metrics: aggregatedCurrent,
+                      metrics: accountCurrentMetrics,
                     });
                     setIsAiModalOpen(true);
                   }}
@@ -313,10 +372,7 @@ export default function App() {
                           entityType: 'Ad Creative',
                           issueTitle: 'Possible Creative Fatigue (Penurunan CTR & Lonjakan Frekuensi)',
                           signalType: 'CREATIVE_FATIGUE',
-                          metricChanges: [
-                            { label: 'CTR', change: '↓ 34%', isNegative: true },
-                            { label: 'Frequency', change: '↑ 58%', isNegative: true },
-                          ],
+                          metricChanges: priorityFatiguedChanges,
                           onViewDetail: () => {
                             handleOpenAiDiagnosis(priorityFatiguedAd.name, 'ad', priorityFatiguedAd.metrics);
                           },
@@ -375,7 +431,7 @@ export default function App() {
                 )}
 
                 {/* 5. Trend Performance Chart */}
-                <TrendPerformanceChart data={MOCK_TREND_DATA} />
+                <TrendPerformanceChart data={trendData} isRealMode={metaConfig.mode === 'real'} />
 
                 {/* 6. Campaign Performance Snapshot */}
                 <CampaignTable
@@ -390,8 +446,9 @@ export default function App() {
             {currentTab === 'landing_pages' && (
               <div className="space-y-6 animate-in fade-in duration-200">
                 <LandingPageHealthView
-                  landingPages={landingPages}
+                  landingPages={effectiveLandingPages}
                   clarityConfig={clarityConfig}
+                  metaMode={metaConfig.mode}
                   availableCampaigns={campaigns}
                   onRefreshClarity={handleRefreshClarity}
                   isSyncingClarity={isSyncingClarity}
@@ -469,7 +526,7 @@ export default function App() {
                 <RecommendationCenter
                   recommendations={allRecommendations}
                   onViewAiAnalysis={(item) => {
-                    handleOpenAiDiagnosis(item.entityName, item.entityType, aggregatedCurrent);
+                    handleOpenAiDiagnosis(item.entityName, item.entityType, accountCurrentMetrics);
                   }}
                 />
               </div>
@@ -481,7 +538,7 @@ export default function App() {
                 <AlertSystemView
                   alerts={allAlerts}
                   onAnalyzeAlert={(alert) => {
-                    handleOpenAiDiagnosis(alert.entityName, alert.entityType, aggregatedCurrent);
+                    handleOpenAiDiagnosis(alert.entityName, alert.entityType, accountCurrentMetrics);
                   }}
                 />
               </div>
@@ -503,8 +560,23 @@ export default function App() {
                 <MetaIntegrationView
                   config={metaConfig}
                   onUpdateConfig={(cfg) => {
+                    const prevMode = metaConfig.mode;
                     const updated = metaAdsService.setConnectionConfig(cfg);
                     setMetaConfig(updated);
+                    if (updated.mode === 'real' && prevMode !== 'real') {
+                      setCampaigns([]);
+                      setAccountCurrentMetrics(createUnknownPerformanceMetrics());
+                      setAccountPreviousMetrics(createUnknownPerformanceMetrics());
+                      setTrendData([]);
+                      setOverviewAiDiagnosis(null);
+                    } else if (updated.mode === 'mock' && prevMode !== 'mock') {
+                      const mock = metaAdsService.getMockBaselineOverview(currentPeriod);
+                      setCampaigns(mock.campaigns);
+                      setAccountCurrentMetrics(mock.current);
+                      setAccountPreviousMetrics(mock.previous);
+                      setTrendData(mock.dailyTrend);
+                      setLandingPages(clarityService.getInitialLandingPages());
+                    }
                   }}
                   onRefreshData={handleRefreshData}
                   isSyncing={isSyncing}
@@ -556,7 +628,7 @@ export default function App() {
         campaigns={campaigns}
         targets={targets}
         initialEntity={aiModalEntity}
-        landingPages={landingPages}
+        landingPages={effectiveLandingPages}
         funnelDiagnosis={funnelDiagnosis}
       />
     </div>

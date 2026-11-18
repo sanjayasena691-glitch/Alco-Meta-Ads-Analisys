@@ -60,8 +60,17 @@ class ClarityService {
     return [...this.projects];
   }
 
-  public async getLandingPages(period?: TimePeriod): Promise<LandingPageWithMetrics[]> {
+  public async getLandingPages(
+    period?: TimePeriod,
+    metaMode: 'mock' | 'real' = 'mock'
+  ): Promise<LandingPageWithMetrics[]> {
     await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Strict isolation: Mock Clarity data must NEVER participate in Real Mode diagnosis
+    if (metaMode === 'real' && this.config.isMockMode) {
+      return [];
+    }
+
     const factor = getPeriodScaleFactor(period);
 
     return this.landingPages.map((lp) => {
@@ -85,8 +94,12 @@ class ClarityService {
     });
   }
 
-  public async getLandingPageById(id: string, period?: TimePeriod): Promise<LandingPageWithMetrics | undefined> {
-    const list = await this.getLandingPages(period);
+  public async getLandingPageById(
+    id: string,
+    period?: TimePeriod,
+    metaMode: 'mock' | 'real' = 'mock'
+  ): Promise<LandingPageWithMetrics | undefined> {
+    const list = await this.getLandingPages(period, metaMode);
     return list.find((item) => item.profile.id === id);
   }
 
@@ -120,19 +133,29 @@ class ClarityService {
 
   public async refreshLandingPages(
     period?: TimePeriod,
-    force: boolean = false
+    force: boolean = false,
+    metaMode: 'mock' | 'real' = 'mock'
   ): Promise<{
     success: boolean;
     isRateLimited: boolean;
     message: string;
     data: LandingPageWithMetrics[];
   }> {
+    if (metaMode === 'real' && this.config.isMockMode) {
+      return {
+        success: false,
+        isRateLimited: false,
+        message: 'Integrasi Microsoft Clarity saat ini masih dalam mode simulasi (mock) dan tidak digunakan pada Real Mode Meta Ads.',
+        data: [],
+      };
+    }
+
     const now = Date.now();
 
     // Cache-awareness & Rate Limit Cooldown (60s minimum interval)
     if (!force && this.config.nextAllowedSyncAt > now) {
       const remainingSeconds = Math.ceil((this.config.nextAllowedSyncAt - now) / 1000);
-      const cachedData = await this.getLandingPages(period);
+      const cachedData = await this.getLandingPages(period, metaMode);
       return {
         success: true,
         isRateLimited: true,
@@ -153,7 +176,7 @@ class ClarityService {
       lp.profile.lastSyncedAt = timeStr;
     });
 
-    const data = await this.getLandingPages(period);
+    const data = await this.getLandingPages(period, metaMode);
     return {
       success: true,
       isRateLimited: false,
@@ -162,12 +185,15 @@ class ClarityService {
     };
   }
 
-  public async refreshData(period?: TimePeriod): Promise<{
+  public async refreshData(
+    period?: TimePeriod,
+    metaMode: 'mock' | 'real' = 'mock'
+  ): Promise<{
     landingPages: LandingPageWithMetrics[];
     isRateLimited: boolean;
     message: string;
   }> {
-    const res = await this.refreshLandingPages(period);
+    const res = await this.refreshLandingPages(period, false, metaMode);
     return {
       landingPages: res.data,
       isRateLimited: res.isRateLimited,

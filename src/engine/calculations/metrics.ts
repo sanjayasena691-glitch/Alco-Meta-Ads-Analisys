@@ -3,7 +3,8 @@ import {
   PeriodMetricsSummary, 
   MetricWithComparison,
   BusinessTargets,
-  AdCreative 
+  AdCreative,
+  DataAvailability
 } from '../../types';
 import { calculatePercentChange } from '../../utils/formatters';
 export { calculatePercentChange };
@@ -21,13 +22,12 @@ export function calculateMetricsFromRaw(
     landingPageViews?: number | null;
     addToCart?: number | null;
     initiateCheckout?: number | null;
+    frequencyOverride?: number | null;
   }
 ): PerformanceMetrics {
   let roas: number | null = null;
   if (revenue !== null && spend !== null && spend > 0) {
     roas = Number((revenue / spend).toFixed(2));
-  } else if (revenue !== null && spend !== null && spend === 0 && revenue === 0) {
-    roas = 0;
   }
 
   let cpa: number | null = null;
@@ -51,16 +51,31 @@ export function calculateMetricsFromRaw(
   }
 
   let frequency: number | null = null;
-  if (impressions !== null && reach !== null && reach > 0) {
+  if (funnel?.frequencyOverride !== undefined && funnel?.frequencyOverride !== null && Number.isFinite(funnel.frequencyOverride)) {
+    frequency = funnel.frequencyOverride;
+  } else if (impressions !== null && reach !== null && reach > 0) {
     frequency = Number((impressions / reach).toFixed(2));
   }
 
-  const hasAny = spend !== null || impressions !== null || reach !== null || clicks !== null;
-  const dataAvailability = (spend !== null && impressions !== null && clicks !== null)
+  const hasAny =
+    spend !== null ||
+    impressions !== null ||
+    reach !== null ||
+    clicks !== null ||
+    purchases !== null ||
+    revenue !== null;
+  const hasCoreDelivery = spend !== null && impressions !== null && clicks !== null;
+  const isZeroDelivery = spend === 0 && impressions === 0 && clicks === 0;
+  const hasConversionCompleteness =
+    isZeroDelivery ||
+    (purchases !== null && (purchases === 0 || revenue !== null));
+  const hasReachCompleteness = impressions === 0 || reach !== null;
+
+  const dataAvailability: DataAvailability = !hasAny
+    ? 'UNAVAILABLE'
+    : (hasCoreDelivery && hasConversionCompleteness && hasReachCompleteness)
     ? 'AVAILABLE'
-    : hasAny
-    ? 'PARTIAL'
-    : 'UNAVAILABLE';
+    : 'PARTIAL';
 
   return {
     spend,
@@ -84,8 +99,12 @@ export function calculateMetricsFromRaw(
   };
 }
 
-export function aggregateMetrics(metricsList: PerformanceMetrics[]): PerformanceMetrics {
+export function aggregateMetrics(
+  metricsList: PerformanceMetrics[],
+  accountLevelMetrics?: PerformanceMetrics | null
+): PerformanceMetrics {
   if (!metricsList || metricsList.length === 0) {
+    if (accountLevelMetrics) return { ...accountLevelMetrics };
     return calculateMetricsFromRaw(null, null, null, null, null, null);
   }
 
@@ -101,28 +120,66 @@ export function aggregateMetrics(metricsList: PerformanceMetrics[]): Performance
   const totalRevenue = sumNullable('revenue');
   const totalPurchases = sumNullable('purchases');
   const totalImpressions = sumNullable('impressions');
-  const totalReach = sumNullable('reach');
   const totalClicks = sumNullable('clicks');
 
   const totalLinkClicks = sumNullable('linkClicks');
+  const totalOutboundClicks = sumNullable('outboundClicks');
   const totalLpViews = sumNullable('landingPageViews');
   const totalAddToCart = sumNullable('addToCart');
   const totalCheckout = sumNullable('initiateCheckout');
 
-  return calculateMetricsFromRaw(
+  // Account-level reach CANNOT be summed across multiple campaigns (overlap causes double-counting).
+  // Use authoritative Meta account-level reach/frequency when provided; preserve for single-entity list; otherwise null.
+  let accountReach: number | null = null;
+  let accountFrequency: number | null = null;
+
+  if (accountLevelMetrics) {
+    accountReach = accountLevelMetrics.reach;
+    accountFrequency = accountLevelMetrics.frequency;
+  } else if (metricsList.length === 1) {
+    accountReach = metricsList[0].reach;
+    accountFrequency = metricsList[0].frequency;
+  }
+
+  const aggregated = calculateMetricsFromRaw(
     totalSpend,
     totalRevenue,
     totalPurchases,
     totalImpressions,
-    totalReach,
+    accountReach,
     totalClicks,
     {
       linkClicks: totalLinkClicks,
+      outboundClicks: totalOutboundClicks,
       landingPageViews: totalLpViews,
       addToCart: totalAddToCart,
       initiateCheckout: totalCheckout,
+      frequencyOverride: accountFrequency,
     }
   );
+
+  // Preserve PARTIAL status if any contributing active slice is PARTIAL/UNAVAILABLE or has mixed null conversion values
+  const hasMixedAvailability = metricsList.some(
+    (m) => m.dataAvailability === 'PARTIAL' || (m.dataAvailability === 'UNAVAILABLE' && aggregated.dataAvailability !== 'UNAVAILABLE')
+  );
+  const hasMixedPurchaseNull =
+    totalPurchases !== null && metricsList.some((m) => (m.spend === null || m.spend > 0) && m.purchases === null);
+  const hasMixedRevenueNull =
+    totalRevenue !== null && metricsList.some((m) => (m.purchases ?? 0) > 0 && m.revenue === null);
+  const hasMixedAttribution = metricsList.some((m) => m.attributionConsistent === false);
+
+  if (
+    aggregated.dataAvailability === 'AVAILABLE' &&
+    (hasMixedAvailability || hasMixedPurchaseNull || hasMixedRevenueNull)
+  ) {
+    aggregated.dataAvailability = 'PARTIAL';
+  }
+
+  if (hasMixedAttribution) {
+    aggregated.attributionConsistent = false;
+  }
+
+  return aggregated;
 }
 
 /**
@@ -260,23 +317,37 @@ export const calculatePeriodMetricsSummary = (
 export function calculateCreativeCompositeScore(
   ad: AdCreative,
   targets: BusinessTargets
-): number {
+): number | null {
   const m = ad.metrics;
 
-  // If core metrics are unavailable or missing
-  if (m.spend === null || m.impressions === null) {
-    return 30; // Unknown baseline
+  // Essential metrics must be known; never coerce missing metrics into 0 or 30/35 baseline scores
+  if (
+    m.dataAvailability === 'UNAVAILABLE' ||
+    m.spend === null ||
+    m.impressions === null ||
+    m.ctr === null ||
+    m.purchases === null ||
+    m.spend <= 0 ||
+    m.impressions <= 0
+  ) {
+    return null;
+  }
+
+  // If verified purchases exist, ROAS and CPA must be available (e.g. revenue cannot be missing/null)
+  if (m.purchases > 0 && (m.roas === null || m.cpa === null)) {
+    return null;
   }
 
   const spend = m.spend;
-  const purchases = m.purchases ?? 0;
-  const roas = m.roas ?? 0;
-  const ctr = m.ctr ?? 0;
+  const purchases = m.purchases;
+  // When verified purchases === 0, effective ROAS for scoring is 0 even if action_values array was empty
+  const roas = purchases === 0 ? (m.roas ?? 0) : (m.roas as number);
+  const ctr = m.ctr;
   const cpa = m.cpa;
 
-  // Insufficient data protection: If spend < 1x Target CPA and 0 purchases, cannot score high
+  // Insufficient statistical volume protection: spend < 0.7x Target CPA with 0 purchases cannot be scored reliably
   if (spend < targets.targetCpa * 0.7 && purchases === 0) {
-    return 35; // Neutral baseline
+    return null;
   }
 
   // 1. ROAS Score (0 - 100)
@@ -298,7 +369,7 @@ export function calculateCreativeCompositeScore(
       cpaScore = Math.max(0, 50 - ((cpa - targets.breakEvenCpa) / targets.breakEvenCpa) * 50);
     }
   } else {
-    // 0 purchases or cpa null
+    // Verified 0 purchases
     if (spend > targets.breakEvenCpa) {
       cpaScore = 10;
     } else {

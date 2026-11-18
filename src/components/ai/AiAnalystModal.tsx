@@ -150,7 +150,11 @@ export const AiAnalystModal: React.FC<AiAnalystModalProps> = ({
               <div className="flex items-center gap-2">
                 <h2 className="text-base sm:text-lg font-bold">ALCO AI Ads Consultant</h2>
                 <span className="text-[10px] font-bold bg-white/20 text-white px-2 py-0.5 rounded-full">
-                  Gemini-Powered
+                  {analysisResult
+                    ? analysisResult.source === 'gemini'
+                      ? 'Gemini AI'
+                      : 'Rule Engine'
+                    : 'ALCO AI Engine'}
                 </span>
               </div>
               <p className="text-xs text-sky-200">

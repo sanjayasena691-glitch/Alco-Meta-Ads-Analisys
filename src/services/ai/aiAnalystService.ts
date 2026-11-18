@@ -39,8 +39,8 @@ export async function requestAiDiagnosis(payload: AnalysisRequestPayload): Promi
       if (data && data.whatHappened) {
         return {
           ...data,
-          source: 'gemini',
-          generatedAt: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+          source: data.source === 'gemini' ? 'gemini' : 'rule_engine',
+          generatedAt: data.generatedAt || new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
         };
       }
     }

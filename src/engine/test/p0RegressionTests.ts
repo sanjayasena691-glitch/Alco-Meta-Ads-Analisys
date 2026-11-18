@@ -201,9 +201,9 @@ export async function runP0MetaRegressionTests(): Promise<IntegrityTestSuiteResu
         funnel.primaryBottleneck === 'INSUFFICIENT_DATA' &&
         Array.isArray(recs) &&
         Array.isArray(alerts) &&
-        Number.isFinite(creativeScore);
+        creativeScore === null;
 
-      actual = `availability=${camp.metrics.dataAvailability}, spend=${camp.metrics.spend}, eval=${evaluation.status}, funnel=${funnel.primaryBottleneck}`;
+      actual = `availability=${camp.metrics.dataAvailability}, spend=${camp.metrics.spend}, eval=${evaluation.status}, funnel=${funnel.primaryBottleneck}, creativeScore=${creativeScore}`;
     } catch (err: any) {
       passed = false;
       actual = `THREW: ${err?.message || String(err)}`;
@@ -212,9 +212,9 @@ export async function runP0MetaRegressionTests(): Promise<IntegrityTestSuiteResu
     results.push({
       id: 'P0_TEST_3_CAMPAIGN_WITHOUT_INSIGHTS',
       name: '3. Campaign Tanpa Insights',
-      description: 'Campaign, AdSet, dan Ad tanpa response insights memetakan semua metrik ke null (UNAVAILABLE) dan aman di seluruh engine.',
+      description: 'Campaign, AdSet, dan Ad tanpa response insights memetakan semua metrik ke null (UNAVAILABLE), creativeScore=null, dan aman di seluruh engine.',
       passed,
-      expected: 'availability=UNAVAILABLE, spend=null, eval=NOT_ENOUGH_DATA, funnel=INSUFFICIENT_DATA',
+      expected: 'availability=UNAVAILABLE, spend=null, eval=NOT_ENOUGH_DATA, funnel=INSUFFICIENT_DATA, creativeScore=null',
       actual,
     });
   }
