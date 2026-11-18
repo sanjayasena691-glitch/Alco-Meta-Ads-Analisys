@@ -40,7 +40,7 @@ export const FunnelVisualization: React.FC<FunnelVisualizationProps> = ({
   } = metrics;
 
   // Drop-off calculations
-  const linkToLpDrop = (linkClicks > 0 && landingPageViews !== null)
+  const linkToLpDrop = (linkClicks !== null && linkClicks > 0 && landingPageViews !== null)
     ? Math.max(0, Math.round((1 - landingPageViews / linkClicks) * 100))
     : null;
   const isLpDropCritical = (linkToLpDrop !== null && linkToLpDrop >= 28) || (lpViewRate !== null && lpViewRate < 72);
@@ -51,22 +51,22 @@ export const FunnelVisualization: React.FC<FunnelVisualizationProps> = ({
     {
       name: 'Impression',
       stageKey: 'impression' as const,
-      value: impressions > 0 ? impressions : 0,
+      value: impressions !== null ? impressions : null,
       conversionRate: null,
       dropOffRate: null,
-      status: impressions > 0 ? 'HEALTHY' as const : 'INSUFFICIENT_DATA' as const,
+      status: impressions !== null && impressions > 0 ? 'HEALTHY' as const : 'INSUFFICIENT_DATA' as const,
       evidence: [],
-      source: 'META',
+      source: impressions !== null ? 'META' : 'UNKNOWN',
     },
     {
       name: 'Link Click',
       stageKey: 'link_click' as const,
-      value: linkClicks > 0 ? linkClicks : 0,
-      conversionRate: ctr > 0 ? ctr : null,
-      dropOffRate: ctr > 0 ? Number((100 - ctr).toFixed(1)) : null,
-      status: ctr >= 1.4 ? 'HEALTHY' as const : 'MONITOR' as const,
+      value: linkClicks !== null ? linkClicks : null,
+      conversionRate: ctr !== null && ctr > 0 ? ctr : null,
+      dropOffRate: ctr !== null && ctr > 0 ? Number((100 - ctr).toFixed(1)) : null,
+      status: ctr === null ? 'INSUFFICIENT_DATA' as const : (ctr >= 1.4 ? 'HEALTHY' as const : 'MONITOR' as const),
       evidence: [],
-      source: 'META',
+      source: linkClicks !== null ? 'META' : 'UNKNOWN',
     },
     {
       name: 'Landing Page View',
@@ -111,12 +111,12 @@ export const FunnelVisualization: React.FC<FunnelVisualizationProps> = ({
     {
       name: 'Purchase',
       stageKey: 'purchase' as const,
-      value: purchases >= 0 ? purchases : null,
+      value: purchases !== null && purchases >= 0 ? purchases : null,
       conversionRate: purchaseRate,
       dropOffRate: null,
-      status: purchases > 0 ? 'HEALTHY' as const : 'MONITOR' as const,
+      status: purchases === null ? 'UNKNOWN' as const : (purchases > 0 ? 'HEALTHY' as const : 'MONITOR' as const),
       evidence: [],
-      source: 'META',
+      source: purchases !== null ? 'META' : 'UNKNOWN',
     },
   ];
 

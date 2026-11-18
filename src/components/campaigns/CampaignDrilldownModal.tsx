@@ -173,17 +173,21 @@ export const CampaignDrilldownModal: React.FC<CampaignDrilldownModalProps> = ({
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
                     <span className="text-slate-400 text-[11px] block">Purchases</span>
-                    <span className="font-bold text-slate-900 text-sm">{m.purchases} order</span>
+                    <span className="font-bold text-slate-900 text-sm">
+                      {m.purchases !== null ? `${m.purchases} order` : 'N/A'}
+                    </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
                     <span className="text-slate-400 text-[11px] block">CPA</span>
-                    <span className={`font-bold text-sm ${m.cpa > 45_000 ? 'text-rose-600' : 'text-slate-900'}`}>
+                    <span className={`font-bold text-sm ${m.cpa !== null && m.cpa > 45_000 ? 'text-rose-600' : 'text-slate-900'}`}>
                       {formatRupiah(m.cpa)}
                     </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
                     <span className="text-slate-400 text-[11px] block">CTR</span>
-                    <span className="font-semibold text-slate-900 text-sm">{m.ctr}%</span>
+                    <span className="font-semibold text-slate-900 text-sm">
+                      {m.ctr !== null ? `${m.ctr}%` : 'N/A'}
+                    </span>
                   </div>
                   <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
                     <span className="text-slate-400 text-[11px] block">CPC</span>
@@ -259,17 +263,21 @@ export const CampaignDrilldownModal: React.FC<CampaignDrilldownModalProps> = ({
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block">Purchases</span>
-                      <span className="font-semibold text-slate-900">{as.metrics.purchases} orders</span>
+                      <span className="font-semibold text-slate-900">
+                        {as.metrics.purchases !== null ? `${as.metrics.purchases} orders` : 'N/A'}
+                      </span>
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block">CPA</span>
-                      <span className={`font-semibold ${as.metrics.cpa > 45_000 ? 'text-rose-600' : 'text-slate-900'}`}>
+                      <span className={`font-semibold ${as.metrics.cpa !== null && as.metrics.cpa > 45_000 ? 'text-rose-600' : 'text-slate-900'}`}>
                         {formatRupiah(as.metrics.cpa)}
                       </span>
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block">CTR</span>
-                      <span className="font-semibold text-slate-900">{as.metrics.ctr}%</span>
+                      <span className="font-semibold text-slate-900">
+                        {as.metrics.ctr !== null ? `${as.metrics.ctr}%` : 'N/A'}
+                      </span>
                     </div>
                     <div>
                       <span className="text-slate-400 text-[10px] block">Frequency</span>
@@ -325,7 +333,7 @@ export const CampaignDrilldownModal: React.FC<CampaignDrilldownModalProps> = ({
                               <div className="text-right">
                                 <span className="text-[10px] text-slate-400 block">CTR & Freq</span>
                                 <span className="font-medium text-slate-700">
-                                  {ad.metrics.ctr}% &bull; {formatFrequency(ad.metrics.frequency)}
+                                  {ad.metrics.ctr !== null ? `${ad.metrics.ctr}%` : 'N/A'} &bull; {formatFrequency(ad.metrics.frequency)}
                                 </span>
                               </div>
                               <button

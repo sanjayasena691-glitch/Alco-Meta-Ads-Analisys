@@ -34,7 +34,7 @@ import { runRuleIntegrityTests } from '../../engine/test/ruleIntegrityTests';
 interface MetaIntegrationViewProps {
   config: MetaConnectionConfig;
   onUpdateConfig: (config: Partial<MetaConnectionConfig>) => void;
-  onRefreshData: () => void;
+  onRefreshData: () => Promise<{ syncStatus?: string; errorMessage?: string } | void> | void;
   isSyncing: boolean;
   clarityConfig?: ClarityConnectionConfig;
   onUpdateClarityConfig?: (config: Partial<ClarityConnectionConfig>) => void;
@@ -56,6 +56,7 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
   const [accessToken, setAccessToken] = useState(config.accessToken || '');
   const [showToken, setShowToken] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Ad Account discovery
   const [adAccounts, setAdAccounts] = useState<MetaAdAccountSummary[]>([]);
@@ -124,8 +125,15 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
     }
   };
 
-  const handleSaveConfig = (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
+    setSaveSuccess(false);
+
+    if (mode === 'real' && !accessToken.trim()) {
+      setSaveError('Access Token Meta wajib diisi untuk menggunakan Real Mode.');
+      return;
+    }
 
     const selectedAcc = adAccounts.find((a) => a.id === selectedAccountId);
 
@@ -148,11 +156,18 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
       });
     }
 
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 3500);
+    // Trigger sync with new config and reflect actual outcome
+    const result = await onRefreshData();
+    const latestConfig = metaAdsService.getConnectionConfig();
+    const status = result?.syncStatus || latestConfig.syncStatus;
+    const errorMsg = result?.errorMessage || latestConfig.errorMessage;
 
-    // Trigger sync with new config
-    onRefreshData();
+    if (status === 'ERROR' || status === 'REAUTH_REQUIRED') {
+      setSaveError(errorMsg || 'Sinkronisasi Meta Ads gagal. Periksa kembali token dan Ad Account Anda.');
+    } else {
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3500);
+    }
   };
 
   const handleDisconnect = () => {
@@ -160,6 +175,7 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
     setAccessToken('');
     setAdAccounts([]);
     setTestResult(null);
+    setSaveError(null);
     onUpdateConfig({
       mode: 'mock',
       accessToken: undefined,
@@ -312,6 +328,20 @@ export const MetaIntegrationView: React.FC<MetaIntegrationViewProps> = ({
         <div className="p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center gap-2 text-emerald-800 text-xs font-semibold animate-in fade-in">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>Konfigurasi Meta Ads berhasil disimpan dan disinkronkan!</span>
+        </div>
+      )}
+
+      {(saveError || (config.mode === 'real' && (config.syncStatus === 'ERROR' || config.syncStatus === 'REAUTH_REQUIRED'))) && (
+        <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl flex items-start gap-2.5 text-rose-800 text-xs font-semibold animate-in fade-in">
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          <div>
+            <span className="block font-bold">
+              {config.syncStatus === 'REAUTH_REQUIRED' ? 'Token Meta Tidak Valid / Kedaluwarsa (REAUTH_REQUIRED)' : 'Sinkronisasi Meta API Gagal (ERROR)'}
+            </span>
+            <span className="font-normal text-rose-700">
+              {saveError || config.errorMessage || 'Periksa kembali Access Token, izin ads_read, atau Ad Account ID yang dipilih.'}
+            </span>
+          </div>
         </div>
       )}
 

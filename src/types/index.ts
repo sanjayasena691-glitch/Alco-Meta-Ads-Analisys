@@ -328,15 +328,15 @@ export interface FunnelStageStatus {
 }
 
 export interface FunnelStageMetrics {
-  impressions: number;
-  linkClicks: number;
+  impressions: number | null;
+  linkClicks: number | null;
   landingPageViews: number | null;
   engagedVisitors: number | null;
   ctaClicks?: number | null;
   checkoutStarts: number | null;
-  purchases: number;
+  purchases: number | null;
   // Rates in percentage (0 - 100) or null if unmeasured
-  ctr: number;
+  ctr: number | null;
   lpViewRate: number | null; // Landing Page Views / Link Clicks
   engagementRate: number | null; // Engaged Visitors / Landing Page Views
   ctaClickRate?: number | null; // CTA Clicks / Landing Page Views (or Sessions)

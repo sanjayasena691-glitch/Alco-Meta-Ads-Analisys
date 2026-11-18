@@ -21,6 +21,7 @@ import { LandingPageWithMetrics, ClarityConnectionConfig } from '../../services/
 import { evaluateLandingPageHealth } from '../../engine/rules/landingPage/landingPageRuleEvaluator';
 import { Campaign, LandingPageStatus } from '../../types';
 import { CampaignMappingModal } from './CampaignMappingModal';
+import { formatRupiah } from '../../utils/formatters';
 
 interface LandingPageHealthViewProps {
   landingPages: LandingPageWithMetrics[];
@@ -284,7 +285,7 @@ export const LandingPageHealthView: React.FC<LandingPageHealthViewProps> = ({
                         key={camp.id}
                         className="px-2 py-0.5 bg-white border border-gray-200 rounded-md text-gray-800 font-medium"
                       >
-                        {camp.name} (Spend: Rp{camp.metrics.spend.toLocaleString('id-ID')})
+                        {camp.name} (Spend: {formatRupiah(camp.metrics.spend)})
                       </span>
                     ))
                   ) : (

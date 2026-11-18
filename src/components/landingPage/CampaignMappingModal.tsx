@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Check, Link2, ExternalLink, AlertCircle } from 'lucide-react';
 import { Campaign } from '../../types';
 import { LandingPageWithMetrics } from '../../services/clarity/clarityTypes';
+import { formatRupiah, formatRoas, formatNumber } from '../../utils/formatters';
 
 interface CampaignMappingModalProps {
   isOpen: boolean;
@@ -91,7 +92,7 @@ export const CampaignMappingModal: React.FC<CampaignMappingModalProps> = ({
                       {camp.name}
                     </div>
                     <div className="text-[11px] text-gray-500 mt-0.5">
-                      Spend: Rp{camp.metrics.spend.toLocaleString('id-ID')} | Clicks: {camp.metrics.clicks} | ROAS: {camp.metrics.roas.toFixed(2)}x
+                      Spend: {formatRupiah(camp.metrics.spend)} | Clicks: {formatNumber(camp.metrics.clicks)} | ROAS: {formatRoas(camp.metrics.roas)}
                     </div>
                   </div>
 

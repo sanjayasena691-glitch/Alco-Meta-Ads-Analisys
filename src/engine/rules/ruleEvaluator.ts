@@ -145,6 +145,7 @@ export function generateRecommendationsFromCampaigns(
   // 1. Funnel-Level Bottleneck Recommendation (Highest Priority if critical)
   if (funnelDiagnosis && funnelDiagnosis.mainBottleneck !== 'HEALTHY' && funnelDiagnosis.mainBottleneck !== 'UNKNOWN') {
     const isCritical = funnelDiagnosis.mainBottleneck === 'LANDING_PAGE_TECHNICAL' || funnelDiagnosis.mainBottleneck === 'LANDING_PAGE_CONTENT' || funnelDiagnosis.mainBottleneck === 'CHECKOUT';
+    const hasDropoffStage = Boolean(funnelDiagnosis.metrics.biggestDropoffStage) && funnelDiagnosis.metrics.dropoffPercentage !== null;
     recommendations.push({
       id: 'rec_funnel_bottleneck',
       entityId: 'funnel_root',
@@ -157,7 +158,9 @@ export function generateRecommendationsFromCampaigns(
       evidence: funnelDiagnosis.evidence,
       recommendedAction: funnelDiagnosis.recommendedAction,
       dontDoYet: funnelDiagnosis.dontDoYet,
-      potentialImpact: `Menghilangkan kebocoran drop-off terbesar di tahap "${funnelDiagnosis.metrics.biggestDropoffStage}" (${funnelDiagnosis.metrics.dropoffPercentage}% drop).`,
+      potentialImpact: hasDropoffStage
+        ? `Menghilangkan kebocoran drop-off terbesar di tahap "${funnelDiagnosis.metrics.biggestDropoffStage}" (${funnelDiagnosis.metrics.dropoffPercentage}% drop).`
+        : 'Menangani bottleneck utama pada alur konversi funnel.',
     });
   }
 

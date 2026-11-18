@@ -23,6 +23,24 @@ import {
 } from '../calculations/metrics';
 import { evaluateLandingPageHealth } from '../rules/landingPage/landingPageRuleEvaluator';
 
+const isKnown = (val: number | null | undefined): val is number =>
+  val !== null && val !== undefined && typeof val === 'number' && Number.isFinite(val);
+
+const fmtIdNumber = (val: number | null | undefined): string =>
+  isKnown(val) ? val.toLocaleString('id-ID') : 'N/A';
+
+const fmtRp = (val: number | null | undefined): string =>
+  isKnown(val) ? `Rp${Math.round(val).toLocaleString('id-ID')}` : 'N/A';
+
+const fmtRoas = (val: number | null | undefined): string =>
+  isKnown(val) ? `${val.toFixed(2)}x` : 'N/A';
+
+const fmtFreq = (val: number | null | undefined): string =>
+  isKnown(val) ? `${val.toFixed(2)}x` : 'N/A';
+
+const fmtPct = (val: number | null | undefined): string =>
+  isKnown(val) ? `${val}%` : 'N/A';
+
 export interface BottleneckDetectionResult {
   primaryBottleneck: FunnelBottleneck;
   secondaryIssue: string | null;
@@ -63,64 +81,74 @@ export function detectPrimaryBottleneck(
   const checkoutStarts = metaMetrics.initiateCheckout ?? lpMetrics?.checkoutStarts ?? null;
   const ctaClicks = lpMetrics?.ctaClicks ?? null;
 
-  // Relative Trends (if previous period exists)
-  const ctrTrend = previousMetrics && previousMetrics.ctr > 0 
-    ? calculatePercentChange(ctr, previousMetrics.ctr) 
+  // Relative Trends (if previous period exists and values are known)
+  const ctrTrend = previousMetrics && isKnown(previousMetrics.ctr) && previousMetrics.ctr > 0 && isKnown(ctr)
+    ? calculatePercentChange(ctr, previousMetrics.ctr)
     : null;
-  const cpcTrend = previousMetrics && previousMetrics.cpc > 0 
-    ? calculatePercentChange(cpc, previousMetrics.cpc) 
+  const cpcTrend = previousMetrics && isKnown(previousMetrics.cpc) && previousMetrics.cpc > 0 && isKnown(cpc)
+    ? calculatePercentChange(cpc, previousMetrics.cpc)
     : null;
-  const freqTrend = previousMetrics && previousMetrics.frequency > 0 
-    ? calculatePercentChange(frequency, previousMetrics.frequency) 
-    : null;
-  const cpaTrend = previousMetrics && previousMetrics.cpa > 0 
-    ? calculatePercentChange(cpa, previousMetrics.cpa) 
+  const freqTrend = previousMetrics && isKnown(previousMetrics.frequency) && previousMetrics.frequency > 0 && isKnown(frequency)
+    ? calculatePercentChange(frequency, previousMetrics.frequency)
     : null;
 
   // Rate helpers (pure numbers or null)
   const lpViewRate = calculateLpViewRate(landingPageViews, linkClicks);
   const quickBackRate = lpMetrics ? calculateSafeRate(lpMetrics.quickBacks, lpMetrics.sessions) : null;
   const rageClickRate = lpMetrics ? calculateSafeRate(lpMetrics.rageClicks, lpMetrics.sessions) : null;
-  const deadClickRate = lpMetrics ? calculateSafeRate(lpMetrics.deadClicks, lpMetrics.sessions) : null;
   const ctaClickRateVal = calculateCtaClickRate(ctaClicks, sessions);
   const checkoutRate = calculateCheckoutRate(checkoutStarts, sessions);
   const purchaseRate = calculatePurchaseRate(purchases, checkoutStarts);
 
-  // Business Target Profitability Classification
+  // Business Target Profitability Classification (only when purchases > 0 and CPA is known)
   let cpaEvaluationText = '';
-  if (purchases > 0) {
+  if (isKnown(purchases) && purchases > 0 && isKnown(cpa)) {
     if (cpa <= targets.targetCpa) {
-      cpaEvaluationText = `CPA (Rp${cpa.toLocaleString('id-ID')}) berada dalam batas target (<= Rp${targets.targetCpa.toLocaleString('id-ID')}).`;
+      cpaEvaluationText = `CPA (${fmtRp(cpa)}) berada dalam batas target (<= ${fmtRp(targets.targetCpa)}).`;
     } else if (cpa <= targets.breakEvenCpa) {
-      cpaEvaluationText = `CPA (Rp${cpa.toLocaleString('id-ID')}) di atas target CPA (Rp${targets.targetCpa.toLocaleString('id-ID')}) namun masih di bawah batas break-even (Rp${targets.breakEvenCpa.toLocaleString('id-ID')}) — transaksi masih menghasilkan profit kotor.`;
+      cpaEvaluationText = `CPA (${fmtRp(cpa)}) di atas target CPA (${fmtRp(targets.targetCpa)}) namun masih di bawah batas break-even (${fmtRp(targets.breakEvenCpa)}) — transaksi masih menghasilkan profit kotor.`;
     } else {
-      cpaEvaluationText = `CPA (Rp${cpa.toLocaleString('id-ID')}) telah melebihi break-even CPA (Rp${targets.breakEvenCpa.toLocaleString('id-ID')}) — unit ekonomi mengalami kerugian operasional per transaksi.`;
+      cpaEvaluationText = `CPA (${fmtRp(cpa)}) telah melebihi break-even CPA (${fmtRp(targets.breakEvenCpa)}) — unit ekonomi mengalami kerugian operasional per transaksi.`;
     }
   }
 
   const evidence: string[] = [];
 
   // =========================================================================
-  // RULE 1: INSUFFICIENT DATA PROTECTION
+  // RULE 1: INSUFFICIENT DATA & UNAVAILABLE METRICS PROTECTION
   // =========================================================================
-  const isLowSpendNoPurchase = spend < targets.targetCpa * 0.7 && purchases === 0;
-  const isSmallSample = impressions < 800 || linkClicks < 25 || (sessions !== undefined && sessions < 30);
+  const isDataUnavailable = metaMetrics.dataAvailability === 'UNAVAILABLE' || !isKnown(spend) || !isKnown(impressions);
+  const isLowSpendNoPurchase = isKnown(spend) && spend < targets.targetCpa * 0.7 && (purchases === 0 || !isKnown(purchases));
+  const isSmallSample =
+    (isKnown(impressions) && impressions < 800) ||
+    (isKnown(linkClicks) && linkClicks < 25) ||
+    (sessions !== undefined && sessions < 30);
 
-  if (isLowSpendNoPurchase || (purchases === 0 && isSmallSample)) {
-    evidence.push(`Total spend saat ini: Rp${spend.toLocaleString('id-ID')} (Ambang batas 0.7x Target CPA: Rp${Math.round(targets.targetCpa * 0.7).toLocaleString('id-ID')})`);
-    evidence.push(`Tayangan: ${impressions.toLocaleString('id-ID')} (Standar minimal uji: 800)`);
-    evidence.push(`Link clicks: ${linkClicks} | Sesi LP: ${sessions !== undefined ? sessions : 'N/A'}`);
-    if (purchases === 0) evidence.push('Belum ada transaksi purchase yang tercatat.');
+  if (isDataUnavailable || isLowSpendNoPurchase || (purchases === 0 && isSmallSample)) {
+    evidence.push(`Total spend saat ini: ${fmtRp(spend)} (Ambang batas 0.7x Target CPA: ${fmtRp(targets.targetCpa * 0.7)})`);
+    evidence.push(`Tayangan: ${fmtIdNumber(impressions)} (Standar minimal uji: 800)`);
+    evidence.push(`Link clicks: ${fmtIdNumber(linkClicks)} | Sesi LP: ${sessions !== undefined ? sessions : 'N/A'}`);
+    if (purchases === 0) {
+      evidence.push('Belum ada transaksi purchase yang tercatat.');
+    } else if (!isKnown(purchases)) {
+      evidence.push('Data konversi purchase belum tersedia (N/A).');
+    }
 
     return {
       primaryBottleneck: 'INSUFFICIENT_DATA',
       secondaryIssue: null,
       confidence: 'High',
-      bottleneckTitle: 'Data Belum Cukup untuk Kesimpulan Statistik',
-      headlineSummary: `Spend saat ini (Rp${spend.toLocaleString('id-ID')}) dan volume interaksi belum memenuhi batas minimum signifikansi statistik.`,
-      detailedReason: 'Algoritma lelang Meta Ads masih dalam fase pembelajaran (learning phase), dan sample visitor belum cukup besar untuk menarik kesimpulan mengenai performa iklan ataupun landing page.',
+      bottleneckTitle: isDataUnavailable ? 'Data Metrik Belum Tersedia' : 'Data Belum Cukup untuk Kesimpulan Statistik',
+      headlineSummary: isDataUnavailable
+        ? 'Belum ada data insight Meta Ads yang tersedia pada periode ini atau sinkronisasi belum memuat metrik performa.'
+        : `Spend saat ini (${fmtRp(spend)}) dan volume interaksi belum memenuhi batas minimum signifikansi statistik.`,
+      detailedReason: isDataUnavailable
+        ? 'Metrik spend, tayangan, atau konversi belum tercatat dari Meta Graph API pada rentang tanggal ini. Pastikan akun memiliki campaign aktif dan event tracking telah terpasang.'
+        : 'Algoritma lelang Meta Ads masih dalam fase pembelajaran (learning phase), dan sample visitor belum cukup besar untuk menarik kesimpulan mengenai performa iklan ataupun landing page.',
       evidence,
-      recommendedAction: 'Biarkan campaign mengumpulkan data statistik minimal mencapai 1x Target CPA atau minimal 50+ sesi landing page.',
+      recommendedAction: isDataUnavailable
+        ? 'Pastikan akun iklan memiliki campaign aktif dengan delivery berjalan atau periksa rentang tanggal & koneksi API.'
+        : 'Biarkan campaign mengumpulkan data statistik minimal mencapai 1x Target CPA atau minimal 50+ sesi landing page.',
       dontDoYet: 'Jangan pause campaign atau mengubah isi landing page berdasarkan data yang belum reliabel saat ini.',
       priority: 'MONITOR',
     };
@@ -145,7 +173,7 @@ export function detectPrimaryBottleneck(
   // CANDIDATE A: TECHNICAL LP PROBLEM (Loading crash / Script errors / High Rage Clicks)
   // =========================================================================
   const isScriptCrash = lpMetrics && lpMetrics.scriptErrors >= 8;
-  const isLpViewLeak = linkClicks >= 25 && lpViewRate !== null && lpViewRate < 72.0 && (metaMetrics.landingPageViews !== undefined || sessions !== undefined);
+  const isLpViewLeak = isKnown(linkClicks) && linkClicks >= 25 && lpViewRate !== null && lpViewRate < 72.0 && (metaMetrics.landingPageViews !== undefined || sessions !== undefined);
   const isHighRage = rageClickRate !== null && rageClickRate >= 7.0 && (lpMetrics?.rageClicks || 0) >= 5;
 
   if (isScriptCrash || isLpViewLeak || isHighRage) {
@@ -154,7 +182,7 @@ export function detectPrimaryBottleneck(
     let isVeryStrong = false;
 
     if (isLpViewLeak) {
-      techSignals.push(`LP View Rate hanya ${lpViewRate}% dari ${linkClicks} klik iklan (kebocoran loading: ${(100 - (lpViewRate ?? 0)).toFixed(1)}%)`);
+      techSignals.push(`LP View Rate hanya ${lpViewRate}% dari ${fmtIdNumber(linkClicks)} klik iklan (kebocoran loading: ${(100 - (lpViewRate ?? 0)).toFixed(1)}%)`);
       severity += 10;
       if (lpViewRate < 60) isVeryStrong = true;
     }
@@ -185,16 +213,16 @@ export function detectPrimaryBottleneck(
   // CANDIDATE B: CREATIVE FATIGUE (Multi-signal: Frequency up + CTR down + CPC up + previous worse)
   // Must NOT trigger if CTR and CPC remain healthy despite high frequency (Scenario H)
   // =========================================================================
-  const isHighFreq = frequency >= 2.4 || (freqTrend !== null && freqTrend >= 20);
-  const isCtrDropping = (ctrTrend !== null && ctrTrend <= -15) || ctr < (targets.targetCtr ? targets.targetCtr * 0.75 : 1.25);
-  const isCpcRising = (cpcTrend !== null && cpcTrend >= 15) || cpc > (targets.targetCpc ? targets.targetCpc * 1.3 : 4000);
-  const isPerformanceDropping = roas < (targets.targetRoas || 2.5) || cpa > targets.targetCpa;
+  const isHighFreq = isKnown(frequency) && (frequency >= 2.4 || (freqTrend !== null && freqTrend >= 20));
+  const isCtrDropping = isKnown(ctr) && ((ctrTrend !== null && ctrTrend <= -15) || ctr < (targets.targetCtr ? targets.targetCtr * 0.75 : 1.25));
+  const isCpcRising = isKnown(cpc) && ((cpcTrend !== null && cpcTrend >= 15) || cpc > (targets.targetCpc ? targets.targetCpc * 1.3 : 4000));
+  const isPerformanceDropping = (isKnown(roas) && roas < (targets.targetRoas || 2.5)) || (isKnown(cpa) && cpa > targets.targetCpa);
 
   if (isHighFreq && isCtrDropping && isCpcRising && isPerformanceDropping) {
     const creativeSignals: string[] = [
-      `Frequency tinggi di angka ${frequency.toFixed(2)}x ${freqTrend ? `(naik +${freqTrend.toFixed(1)}%)` : ''}`,
-      `CTR turun ke ${ctr}% ${ctrTrend ? `(${ctrTrend.toFixed(1)}% vs periode lalu)` : ''}`,
-      `Biaya per klik (CPC) membengkak menjadi Rp${cpc.toLocaleString('id-ID')} ${cpcTrend ? `(+${cpcTrend.toFixed(1)}%)` : ''}`,
+      `Frequency tinggi di angka ${fmtFreq(frequency)} ${freqTrend !== null ? `(naik +${freqTrend.toFixed(1)}%)` : ''}`,
+      `CTR turun ke ${fmtPct(ctr)} ${ctrTrend !== null ? `(${ctrTrend.toFixed(1)}% vs periode lalu)` : ''}`,
+      `Biaya per klik (CPC) membengkak menjadi ${fmtRp(cpc)} ${cpcTrend !== null ? `(+${cpcTrend.toFixed(1)}%)` : ''}`,
     ];
 
     detectedIssues.push({
@@ -205,8 +233,8 @@ export function detectPrimaryBottleneck(
       signals: creativeSignals,
       action: 'Unggah 2 - 3 variasi materi kreatif baru dengan visual hook berbeda (rotasi format video UGC / Carousel) untuk menyegarkan audiens.',
       dontDo: 'Jangan menaikkan budget harian pada materi yang sedang mengalami fatigue.',
-      priority: cpa > targets.breakEvenCpa ? 'CRITICAL' : 'HIGH',
-      strongSignal: (freqTrend !== null && freqTrend >= 30) || frequency >= 2.8,
+      priority: isKnown(cpa) && cpa > targets.breakEvenCpa ? 'CRITICAL' : 'HIGH',
+      strongSignal: (freqTrend !== null && freqTrend >= 30) || (isKnown(frequency) && frequency >= 2.8),
     });
   }
 
@@ -215,7 +243,7 @@ export function detectPrimaryBottleneck(
   // Requires actual lpMetrics to prevent hallucinating LP issues (Scenario J)
   // =========================================================================
   if (lpMetrics && (sessions || 0) >= 25) {
-    const isGoodTraffic = (ctr >= 1.2 || linkClicks >= 30) && (lpViewRate === null || lpViewRate >= 68.0);
+    const isGoodTraffic = ((isKnown(ctr) && ctr >= 1.2) || (isKnown(linkClicks) && linkClicks >= 30)) && (lpViewRate === null || lpViewRate >= 68.0);
     const isQuickBackHigh = quickBackRate !== null && quickBackRate >= 28.0;
     const isScrollLow = lpMetrics.avgScrollDepth < 40;
     const isCtaLow = ctaClickRateVal !== null && ctaClickRateVal < 3.5 && (sessions || 0) >= 30;
@@ -249,7 +277,7 @@ export function detectPrimaryBottleneck(
 
   if (hasCheckoutActivity && isPoorPurchaseConversion && (lpViewRate === null || lpViewRate >= 65)) {
     const checkoutSignals: string[] = [
-      `Sebanyak ${checkoutStarts} checkout diinisiasi, namun hanya ${purchases} yang selesai membayar`,
+      `Sebanyak ${checkoutStarts} checkout diinisiasi, namun hanya ${isKnown(purchases) ? purchases : 'N/A'} yang selesai membayar`,
       `Tingkat penyelesaian checkout (Purchase Rate): ${purchaseRate}% (standar optimal e-commerce: 35%+ - 50%)`,
     ];
 
@@ -269,13 +297,14 @@ export function detectPrimaryBottleneck(
   // =========================================================================
   // CANDIDATE E: ADS WEAK APPEAL (Low CTR, High CPC, without high frequency)
   // =========================================================================
-  const isWeakCtr = ctr < 1.05 && linkClicks > 15;
-  const isExpensiveCpc = cpc > (targets.targetCpc ? targets.targetCpc * 1.35 : 4500);
+  const isWeakCtr = isKnown(ctr) && ctr < 1.05 && isKnown(linkClicks) && linkClicks > 15;
+  const isExpensiveCpc = isKnown(cpc) && cpc > (targets.targetCpc ? targets.targetCpc * 1.35 : 4500);
+  const isUnderFreq = !isKnown(frequency) || frequency < 2.3;
 
-  if (isWeakCtr && (isExpensiveCpc || cpa > targets.targetCpa) && frequency < 2.3) {
+  if (isWeakCtr && (isExpensiveCpc || (isKnown(cpa) && cpa > targets.targetCpa)) && isUnderFreq) {
     const adsSignals: string[] = [
-      `CTR iklan rendah: ${ctr}% (di bawah batas target minimal 1.2% - 1.5%)`,
-      `Biaya per klik (CPC): Rp${cpc.toLocaleString('id-ID')}`,
+      `CTR iklan rendah: ${fmtPct(ctr)} (di bawah batas target minimal 1.2% - 1.5%)`,
+      `Biaya per klik (CPC): ${fmtRp(cpc)}`,
     ];
 
     detectedIssues.push({
@@ -287,7 +316,7 @@ export function detectPrimaryBottleneck(
       action: 'Buat variasi materi iklan baru dengan hook 3 detik pertama yang lebih tajam, kontras visual tinggi, dan solusi yang relevan dengan problem utama audiens.',
       dontDo: 'Jangan merombak landing page sebelum Anda berhasil mendatangkan traffic yang cukup dengan CTR di atas 1.2%.',
       priority: 'MEDIUM',
-      strongSignal: ctr < 0.8,
+      strongSignal: isKnown(ctr) && ctr < 0.8,
     });
   }
 
@@ -295,15 +324,18 @@ export function detectPrimaryBottleneck(
   // CANDIDATE F: OFFER PROBLEM (Funnel flow okay, but ROAS bad / margin loss)
   // =========================================================================
   if (
+    isKnown(roas) &&
     roas < (targets.minAcceptableRoas || targets.targetRoas * 0.8) &&
+    isKnown(cpa) &&
     cpa > targets.breakEvenCpa &&
+    isKnown(purchases) &&
     purchases >= 3 &&
     detectedIssues.length === 0
   ) {
     const offerSignals: string[] = [
-      `ROAS saat ini: ${roas.toFixed(2)}x (Target: ${targets.targetRoas}x)`,
-      `CPA: Rp${cpa.toLocaleString('id-ID')} (Break-even: Rp${targets.breakEvenCpa.toLocaleString('id-ID')})`,
-      cpaEvaluationText,
+      `ROAS saat ini: ${fmtRoas(roas)} (Target: ${targets.targetRoas}x)`,
+      `CPA: ${fmtRp(cpa)} (Break-even: ${fmtRp(targets.breakEvenCpa)})`,
+      ...(cpaEvaluationText ? [cpaEvaluationText] : []),
     ];
 
     detectedIssues.push({
@@ -364,23 +396,28 @@ export function detectPrimaryBottleneck(
   // =========================================================================
   // SCENARIO G / H: HEALTHY FUNNEL (or High Frequency with Stable Great Performance)
   // =========================================================================
-  if (roas >= (targets.minAcceptableRoas || targets.targetRoas * 0.85) && cpa <= targets.targetCpa) {
-    evidence.push(`ROAS: ${roas.toFixed(2)}x (Target: ${targets.targetRoas}x)`);
-    evidence.push(`CPA: Rp${cpa.toLocaleString('id-ID')} (Target CPA: Rp${targets.targetCpa.toLocaleString('id-ID')})`);
-    evidence.push(cpaEvaluationText);
+  if (
+    isKnown(roas) &&
+    isKnown(cpa) &&
+    roas >= (targets.minAcceptableRoas || targets.targetRoas * 0.85) &&
+    cpa <= targets.targetCpa
+  ) {
+    evidence.push(`ROAS: ${fmtRoas(roas)} (Target: ${targets.targetRoas}x)`);
+    evidence.push(`CPA: ${fmtRp(cpa)} (Target CPA: ${fmtRp(targets.targetCpa)})`);
+    if (cpaEvaluationText) evidence.push(cpaEvaluationText);
     if (lpMetrics) {
-      evidence.push(`Landing page engagement sehat (Scroll: ${lpMetrics.avgScrollDepth}%, Quick Back: ${quickBackRate ?? 0}%)`);
+      evidence.push(`Landing page engagement sehat (Scroll: ${lpMetrics.avgScrollDepth}%, Quick Back: ${quickBackRate ?? 'N/A'}%)`);
     }
-    if (frequency >= 2.0) {
-      evidence.push(`Frekuensi ${frequency.toFixed(2)}x tinggi namun performa tetap solid (CTR ${ctr}%, CPC Rp${cpc.toLocaleString('id-ID')}).`);
+    if (isKnown(frequency) && frequency >= 2.0) {
+      evidence.push(`Frekuensi ${fmtFreq(frequency)} tinggi namun performa tetap solid (CTR ${fmtPct(ctr)}, CPC ${fmtRp(cpc)}).`);
     }
 
     return {
       primaryBottleneck: 'HEALTHY',
       secondaryIssue: null,
-      confidence: purchases >= 5 ? 'High' : 'Medium',
+      confidence: isKnown(purchases) && purchases >= 5 ? 'High' : 'Medium',
       bottleneckTitle: 'Seluruh Alur Funnel Berjalan Harmonis & Menguntungkan',
-      headlineSummary: `Performa Meta Ads dan Landing Page berada di atas target bisnis dengan ROAS ${roas.toFixed(2)}x dan ${cpaEvaluationText}`,
+      headlineSummary: `Performa Meta Ads dan Landing Page berada di atas target bisnis dengan ROAS ${fmtRoas(roas)} dan ${cpaEvaluationText}`,
       detailedReason: 'Kesesuaian pesan dari materi iklan, kenyamanan membaca landing page, hingga kemudahan proses pembayaran terbukti bekerja efektif mengonversi visitor menjadi pembeli.',
       evidence,
       recommendedAction: 'Pertahankan materi yang berjalan dan lakukan scale budget secara gradual 15% - 20% setiap 3 - 4 hari.',
@@ -392,9 +429,9 @@ export function detectPrimaryBottleneck(
   // =========================================================================
   // SCENARIO I: CPA ABOVE TARGET BUT BELOW BREAK-EVEN (Profitable / Optimization warning)
   // =========================================================================
-  if (purchases > 0 && cpa > targets.targetCpa && cpa <= targets.breakEvenCpa) {
-    evidence.push(`ROAS: ${roas.toFixed(2)}x | CTR: ${ctr}% | CPC: Rp${cpc.toLocaleString('id-ID')}`);
-    evidence.push(cpaEvaluationText);
+  if (isKnown(purchases) && purchases > 0 && isKnown(cpa) && cpa > targets.targetCpa && cpa <= targets.breakEvenCpa) {
+    evidence.push(`ROAS: ${fmtRoas(roas)} | CTR: ${fmtPct(ctr)} | CPC: ${fmtRp(cpc)}`);
+    if (cpaEvaluationText) evidence.push(cpaEvaluationText);
     if (lpMetrics) {
       evidence.push(`Sesi LP: ${lpMetrics.sessions} | Scroll: ${lpMetrics.avgScrollDepth}%`);
     }
@@ -404,7 +441,7 @@ export function detectPrimaryBottleneck(
       secondaryIssue: null,
       confidence: 'Medium',
       bottleneckTitle: 'Performa Masih Menghasilkan Profit (Perlu Optimasi CPA)',
-      headlineSummary: `CPA saat ini (Rp${cpa.toLocaleString('id-ID')}) berada di atas target CPA namun masih di bawah break-even. Unit ekonomi masih menghasilkan profit kotor.`,
+      headlineSummary: `CPA saat ini (${fmtRp(cpa)}) berada di atas target CPA namun masih di bawah break-even. Unit ekonomi masih menghasilkan profit kotor.`,
       detailedReason: 'Iklan dan landing page beroperasi dengan layak. Optimasi ringan pada hook iklan atau variasi paket penawaran dapat membantu menekan CPA kembali ke target ideal.',
       evidence,
       recommendedAction: 'Lakukan uji coba 1 - 2 variasi hook iklan baru dan pantau pergerakan CPA harian tanpa mematikan campaign utama.',
@@ -417,8 +454,8 @@ export function detectPrimaryBottleneck(
   // SCENARIO J: MISSING LP METRICS & UNKNOWN ROOT CAUSE
   // =========================================================================
   if (!lpMetrics) {
-    evidence.push(`Spend terkumpul: Rp${spend.toLocaleString('id-ID')} | Clicks: ${linkClicks}`);
-    evidence.push(`ROAS: ${roas.toFixed(2)}x | CPA: Rp${cpa.toLocaleString('id-ID')}`);
+    evidence.push(`Spend terkumpul: ${fmtRp(spend)} | Clicks: ${fmtIdNumber(linkClicks)}`);
+    evidence.push(`ROAS: ${fmtRoas(roas)} | CPA: ${fmtRp(cpa)}`);
     evidence.push('Data telemetri perilaku Landing Page (Microsoft Clarity / Event Pixel) belum terhubung.');
 
     return {
@@ -426,7 +463,9 @@ export function detectPrimaryBottleneck(
       secondaryIssue: null,
       confidence: 'Medium',
       bottleneckTitle: 'Data Telemetri Landing Page Belum Terhubung',
-      headlineSummary: `Terdeteksi penurunan konversi (CPA Rp${cpa.toLocaleString('id-ID')}), namun data perilaku pengunjung di landing page belum tersedia untuk mendiagnosis titik kebocoran.`,
+      headlineSummary: isKnown(cpa)
+        ? `Terdeteksi penurunan konversi (CPA ${fmtRp(cpa)}), namun data perilaku pengunjung di landing page belum tersedia untuk mendiagnosis titik kebocoran.`
+        : 'Data konversi/revenue belum lengkap dan telemetri perilaku pengunjung di landing page belum tersedia untuk mendiagnosis titik kebocoran.',
       detailedReason: 'Meta Ads berhasil mendatangkan traffic, namun tanpa data telemetri landing page (seperti Scroll Depth, Quick Back, atau Script Errors), sistem tidak dapat memastikan apakah kendala berada pada kecepatan web, konten halaman, atau alur pembayaran.',
       evidence,
       recommendedAction: 'Hubungkan integrasi Microsoft Clarity atau lengkapi pelacakan Meta Pixel Standard Events (ViewContent, InitiateCheckout) untuk diagnosis akurat.',
@@ -436,7 +475,7 @@ export function detectPrimaryBottleneck(
   }
 
   // Default Monitor Fallback
-  evidence.push(`ROAS: ${roas.toFixed(2)}x | CTR: ${ctr}% | CPC: Rp${cpc.toLocaleString('id-ID')}`);
+  evidence.push(`ROAS: ${fmtRoas(roas)} | CTR: ${fmtPct(ctr)} | CPC: ${fmtRp(cpc)}`);
   if (cpaEvaluationText) evidence.push(cpaEvaluationText);
 
   return {
@@ -444,7 +483,7 @@ export function detectPrimaryBottleneck(
     secondaryIssue: null,
     confidence: 'Medium',
     bottleneckTitle: 'Alur Funnel Berada dalam Batas Wajar (Perlu Pemantauan)',
-    headlineSummary: `Metrik berada dalam rentang toleransi operasional. ${cpaEvaluationText}`,
+    headlineSummary: `Metrik berada dalam rentang toleransi operasional. ${cpaEvaluationText || 'Sebagian metrik konversi atau revenue belum terlaporkan lengkap.'}`.trim(),
     detailedReason: 'Belum ditemukan anomali kritis yang mendesak. Pantau kestabilan performa harian selama 24 - 48 jam ke depan.',
     evidence,
     recommendedAction: 'Pantau konsistensi konversi harian sebelum memutuskan perubahan materi iklan atau struktur halaman web.',
@@ -495,7 +534,7 @@ export function diagnoseFunnelBottleneck(
   const purchaseRate = calculatePurchaseRate(purchases, checkoutStarts);
 
   // Dropoff calculations (strictly null if either stage is unknown)
-  const dropoffLinkToLp = (linkClicks > 0 && landingPageViews !== null)
+  const dropoffLinkToLp = (isKnown(linkClicks) && linkClicks > 0 && landingPageViews !== null)
     ? Math.max(0, Number(((1 - landingPageViews / linkClicks) * 100).toFixed(1)))
     : null;
 
@@ -503,7 +542,7 @@ export function diagnoseFunnelBottleneck(
     ? Math.max(0, Number(((1 - checkoutStarts / landingPageViews) * 100).toFixed(1)))
     : null;
 
-  const dropoffCheckoutToPurchase = (checkoutStarts !== null && checkoutStarts > 0 && purchases >= 0)
+  const dropoffCheckoutToPurchase = (checkoutStarts !== null && checkoutStarts > 0 && isKnown(purchases) && purchases >= 0)
     ? Math.max(0, Number(((1 - purchases / checkoutStarts) * 100).toFixed(1)))
     : null;
 
@@ -560,24 +599,32 @@ export function diagnoseFunnelBottleneck(
     {
       name: 'Impression',
       stageKey: 'impression',
-      value: impressions > 0 ? impressions : 0,
+      value: isKnown(impressions) ? impressions : null,
       conversionRate: null,
       dropOffRate: null,
-      status: impressions > 0 ? 'HEALTHY' : 'INSUFFICIENT_DATA',
-      evidence: [`${impressions.toLocaleString('id-ID')} tayangan di Meta Ads feed`],
-      source: 'META',
+      status: isKnown(impressions) && impressions > 0 ? 'HEALTHY' : 'INSUFFICIENT_DATA',
+      evidence: [
+        isKnown(impressions)
+          ? `${impressions.toLocaleString('id-ID')} tayangan di Meta Ads feed`
+          : 'Data tayangan belum tersedia (N/A)',
+      ],
+      source: isKnown(impressions) ? 'META' : 'UNKNOWN',
     },
     {
       name: 'Link Click',
       stageKey: 'link_click',
-      value: linkClicks > 0 ? linkClicks : 0,
-      conversionRate: ctr > 0 ? ctr : null,
-      dropOffRate: ctr > 0 ? Math.max(0, Number((100 - ctr).toFixed(1))) : null,
-      status: detection.primaryBottleneck === 'ADS' || detection.primaryBottleneck === 'CREATIVE'
+      value: isKnown(linkClicks) ? linkClicks : null,
+      conversionRate: isKnown(ctr) && ctr > 0 ? ctr : null,
+      dropOffRate: isKnown(ctr) && ctr > 0 ? Math.max(0, Number((100 - ctr).toFixed(1))) : null,
+      status: !isKnown(ctr)
+        ? 'INSUFFICIENT_DATA'
+        : detection.primaryBottleneck === 'ADS' || detection.primaryBottleneck === 'CREATIVE'
         ? 'PROBLEM'
-        : (ctr < 1.2 ? 'MONITOR' : 'HEALTHY'),
-      evidence: [`CTR: ${ctr}%`, `CPC: Rp${metaMetrics.cpc.toLocaleString('id-ID')}`],
-      source: 'META',
+        : ctr < 1.2
+        ? 'MONITOR'
+        : 'HEALTHY',
+      evidence: [`CTR: ${fmtPct(ctr)}`, `CPC: ${fmtRp(metaMetrics.cpc)}`],
+      source: isKnown(linkClicks) ? 'META' : 'UNKNOWN',
     },
     {
       name: 'Landing Page View',
@@ -586,14 +633,14 @@ export function diagnoseFunnelBottleneck(
       conversionRate: lpViewRate,
       dropOffRate: dropoffLinkToLp,
       status: landingPageViews === null 
-        ? 'UNKNOWN'
+        ? 'UNKNOWN' 
         : (detection.primaryBottleneck === 'LANDING_PAGE_TECHNICAL'
           ? 'PROBLEM'
           : (lpViewRate !== null && lpViewRate < 72 ? 'MONITOR' : 'HEALTHY')),
       evidence: landingPageViews !== null
-        ? [`View Rate: ${lpViewRate !== null ? `${lpViewRate}%` : 'N/A'} (${landingPageViews} sesi dari ${linkClicks} klik)`]
+        ? [`View Rate: ${lpViewRate !== null ? `${lpViewRate}%` : 'N/A'} (${fmtIdNumber(landingPageViews)} sesi dari ${fmtIdNumber(linkClicks)} klik)`]
         : ['Metrik Landing Page View belum terlacak (Pixel ViewContent / Clarity belum aktif)'],
-      source: metaMetrics.landingPageViews !== undefined ? 'META' : (lpMetrics?.sessions !== undefined ? 'CLARITY' : 'UNKNOWN'),
+      source: isKnown(metaMetrics.landingPageViews) ? 'META' : (lpMetrics?.sessions !== undefined ? 'CLARITY' : 'UNKNOWN'),
     },
     {
       name: 'Engaged Visitor',
@@ -635,34 +682,44 @@ export function diagnoseFunnelBottleneck(
       evidence: checkoutStarts !== null
         ? [`${checkoutStarts} inisiasi formulir checkout`, `Tingkat inisiasi: ${checkoutRate !== null ? `${checkoutRate}%` : 'N/A'}`]
         : ['Event Initiate Checkout tidak terlacak di Pixel atau Form'],
-      source: metaMetrics.initiateCheckout !== undefined ? 'META' : (lpMetrics?.checkoutStarts !== undefined ? 'CUSTOM_EVENT' : 'UNKNOWN'),
+      source: isKnown(metaMetrics.initiateCheckout) ? 'META' : (lpMetrics?.checkoutStarts !== undefined ? 'CUSTOM_EVENT' : 'UNKNOWN'),
     },
     {
       name: 'Purchase',
       stageKey: 'purchase',
-      value: purchases >= 0 ? purchases : null,
-      conversionRate: purchaseRate !== null ? purchaseRate : (linkClicks > 0 ? Number(((purchases / linkClicks) * 100).toFixed(1)) : null),
+      value: isKnown(purchases) && purchases >= 0 ? purchases : null,
+      conversionRate: purchaseRate !== null
+        ? purchaseRate
+        : (isKnown(linkClicks) && linkClicks > 0 && isKnown(purchases)
+          ? Number(((purchases / linkClicks) * 100).toFixed(1))
+          : null),
       dropOffRate: dropoffCheckoutToPurchase,
-      status: metaMetrics.roas >= targets.targetRoas
+      status: !isKnown(purchases)
+        ? 'UNKNOWN'
+        : isKnown(metaMetrics.roas) && metaMetrics.roas >= targets.targetRoas
         ? 'HEALTHY'
-        : (metaMetrics.cpa > targets.breakEvenCpa ? 'PROBLEM' : 'MONITOR'),
+        : isKnown(metaMetrics.cpa) && metaMetrics.cpa > targets.breakEvenCpa
+        ? 'PROBLEM'
+        : 'MONITOR',
       evidence: [
-        `${purchases} transaksi berhasil`,
-        `CPA: Rp${metaMetrics.cpa.toLocaleString('id-ID')}`,
-        `ROAS: ${metaMetrics.roas.toFixed(2)}x`
+        isKnown(purchases) ? `${purchases} transaksi berhasil` : 'Transaksi: Data belum tersedia (N/A)',
+        `CPA: ${fmtRp(metaMetrics.cpa)}`,
+        `ROAS: ${fmtRoas(metaMetrics.roas)}`
       ],
-      source: 'META',
+      source: isKnown(purchases) ? 'META' : 'UNKNOWN',
     },
   ];
 
   // 4. Backward-compatible 4-stage UI blocks
   const adsStatus: FunnelStageStatus = {
     stageName: 'Meta Ads',
-    status: (detection.primaryBottleneck === 'ADS' || detection.primaryBottleneck === 'CREATIVE') 
+    status: !isKnown(ctr)
+      ? 'INSUFFICIENT_DATA'
+      : (detection.primaryBottleneck === 'ADS' || detection.primaryBottleneck === 'CREATIVE') 
       ? 'PROBLEM' 
       : (ctr < 1.4 ? 'MONITOR' : 'HEALTHY'),
-    score: Math.min(100, Math.round((ctr / (targets.targetCtr || 1.8)) * 80)),
-    highlightText: `CTR ${ctr}% | CPC Rp${metaMetrics.cpc.toLocaleString('id-ID')}`,
+    score: isKnown(ctr) ? Math.min(100, Math.round((ctr / (targets.targetCtr || 1.8)) * 80)) : null,
+    highlightText: `CTR ${fmtPct(ctr)} | CPC ${fmtRp(metaMetrics.cpc)}`,
   };
 
   const lpStatus: FunnelStageStatus = {
@@ -685,24 +742,28 @@ export function diagnoseFunnelBottleneck(
       : (detection.primaryBottleneck === 'CHECKOUT' ? 'PROBLEM' : (checkoutStarts > 0 && purchaseRate !== null && purchaseRate < 30 ? 'MONITOR' : 'HEALTHY')),
     score: purchaseRate !== null ? Math.min(100, Math.round(purchaseRate * 2.5)) : null,
     highlightText: checkoutStarts !== null
-      ? `${checkoutStarts} Dimulai | ${purchases} Beli (${purchaseRate !== null ? `${purchaseRate}%` : 'N/A'})`
-      : `${purchases} Beli (Tracking Checkout N/A)`,
+      ? `${checkoutStarts} Dimulai | ${isKnown(purchases) ? purchases : 'N/A'} Beli (${purchaseRate !== null ? `${purchaseRate}%` : 'N/A'})`
+      : `${isKnown(purchases) ? `${purchases} Beli` : 'Pembelian N/A'} (Tracking Checkout N/A)`,
   };
 
   const offerStatus: FunnelStageStatus = {
     stageName: 'Offer',
-    status: (metaMetrics.roas >= targets.targetRoas) ? 'HEALTHY' : (metaMetrics.roas < 1.5 ? 'PROBLEM' : 'MONITOR'),
-    score: Math.min(100, Math.round((metaMetrics.roas / targets.targetRoas) * 85)),
-    highlightText: `ROAS ${metaMetrics.roas.toFixed(2)}x | CPA Rp${metaMetrics.cpa.toLocaleString('id-ID')}`,
+    status: !isKnown(metaMetrics.roas)
+      ? 'INSUFFICIENT_DATA'
+      : (metaMetrics.roas >= targets.targetRoas) ? 'HEALTHY' : (metaMetrics.roas < 1.5 ? 'PROBLEM' : 'MONITOR'),
+    score: isKnown(metaMetrics.roas) && targets.targetRoas > 0
+      ? Math.min(100, Math.round((metaMetrics.roas / targets.targetRoas) * 85))
+      : null,
+    highlightText: `ROAS ${fmtRoas(metaMetrics.roas)} | CPA ${fmtRp(metaMetrics.cpa)}`,
   };
 
   const dataCoverage: FunnelDataCoverage = coverageMetadata || {
-    metaCoveragePercent: 100,
+    metaCoveragePercent: metaMetrics.dataAvailability === 'UNAVAILABLE' ? 0 : (metaMetrics.dataAvailability === 'PARTIAL' ? 50 : 100),
     lpCoveragePercent: lpMetrics ? 100 : (landingPageViews !== null ? 60 : 0),
     ctaTracked: ctaClicks !== null,
     checkoutTracked: checkoutStarts !== null,
     notes: [
-      metaMetrics.landingPageViews !== undefined ? 'Meta LP View terhubung' : 'Meta LP View N/A',
+      isKnown(metaMetrics.landingPageViews) ? 'Meta LP View terhubung' : 'Meta LP View N/A',
       lpMetrics ? 'Clarity behavioral metrics terhubung' : 'Clarity N/A',
     ],
   };
@@ -858,7 +919,7 @@ export function aggregateLandingPageMetrics(
   const aggregatedEvaluation = evaluateLandingPageHealth(aggregatedMetrics, 'Landing Page Agregat Akun');
 
   // Traffic-based coverage calculation if traffic denominator is available
-  const totalRelevantTraffic = metaMetrics?.landingPageViews ?? (metaMetrics?.linkClicks && metaMetrics.linkClicks > 0 ? metaMetrics.linkClicks : null);
+  const totalRelevantTraffic = metaMetrics?.landingPageViews ?? (isKnown(metaMetrics?.linkClicks) && metaMetrics!.linkClicks! > 0 ? metaMetrics!.linkClicks! : null);
   let lpCoveragePercent: number;
   let coverageType: 'traffic' | 'page' | 'unknown';
 

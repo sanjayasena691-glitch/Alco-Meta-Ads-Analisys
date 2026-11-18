@@ -18,7 +18,8 @@ import {
 import { metaAdsClient, normalizeAdAccountId, MetaApiError } from './metaAdsClient';
 import { 
   resolveMetaDateRange, 
-  assembleCampaignHierarchy 
+  assembleCampaignHierarchy,
+  createUnknownPerformanceMetrics
 } from './metaAdsMapper';
 
 export { type MetaConnectionConfig };
@@ -124,6 +125,15 @@ class MetaAdsService {
   }
 
   public setConnectionConfig(config: Partial<MetaConnectionConfig>): MetaConnectionConfig {
+    const credentialsChanged =
+      (config.mode !== undefined && config.mode !== this.connectionConfig.mode) ||
+      (config.accessToken !== undefined && config.accessToken !== this.connectionConfig.accessToken) ||
+      (config.selectedAdAccountId !== undefined && config.selectedAdAccountId !== this.connectionConfig.selectedAdAccountId);
+
+    if (credentialsChanged) {
+      this.realDataSnapshot = null;
+    }
+
     this.connectionConfig = {
       ...this.connectionConfig,
       ...config,
@@ -380,12 +390,8 @@ class MetaAdsService {
       return {
         lastSyncedAt: this.connectionConfig.lastSyncedAt || nowFormatted,
         campaigns: this.realDataSnapshot?.campaigns || [],
-        current: this.realDataSnapshot?.currentMetrics || {
-          spend: 0, revenue: 0, purchases: 0, impressions: 0, reach: 0, clicks: 0, frequency: 1, roas: 0, cpa: 0, ctr: 0, cpc: 0, cpm: 0
-        },
-        previous: this.realDataSnapshot?.previousMetrics || {
-          spend: 0, revenue: 0, purchases: 0, impressions: 0, reach: 0, clicks: 0, frequency: 1, roas: 0, cpa: 0, ctr: 0, cpc: 0, cpm: 0
-        },
+        current: this.realDataSnapshot?.currentMetrics || createUnknownPerformanceMetrics(),
+        previous: this.realDataSnapshot?.previousMetrics || createUnknownPerformanceMetrics(),
         currency: this.connectionConfig.selectedAdAccountCurrency || 'IDR',
         timezone: this.connectionConfig.selectedAdAccountTimezone || 'Asia/Jakarta',
         syncStatus: isAuth ? 'REAUTH_REQUIRED' : 'ERROR',

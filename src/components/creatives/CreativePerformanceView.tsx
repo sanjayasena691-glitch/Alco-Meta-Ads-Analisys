@@ -117,7 +117,11 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {displayedList.map((ad, index) => {
           const isWinner = (ad.compositeScore || 0) >= 70;
-          const isFatigueRisk = ad.metrics.frequency >= 3.0 && ad.metrics.ctr < 1.4;
+          const isFatigueRisk =
+            ad.metrics.frequency !== null &&
+            ad.metrics.frequency >= 3.0 &&
+            ad.metrics.ctr !== null &&
+            ad.metrics.ctr < 1.4;
           const isProblem = ad.status === 'PROBLEM';
 
           return (
@@ -176,14 +180,14 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
                 <div className="grid grid-cols-3 gap-2.5 text-xs mb-4">
                   <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-medium block">ROAS</span>
-                    <span className={`text-base font-bold ${ad.metrics.roas >= 3.0 ? 'text-emerald-600' : 'text-slate-900'}`}>
+                    <span className={`text-base font-bold ${ad.metrics.roas !== null && ad.metrics.roas >= 3.0 ? 'text-emerald-600' : 'text-slate-900'}`}>
                       {formatRoas(ad.metrics.roas)}
                     </span>
                   </div>
 
                   <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-medium block">CPA</span>
-                    <span className={`text-base font-bold ${ad.metrics.cpa > targets.breakEvenCpa ? 'text-rose-600' : 'text-slate-900'}`}>
+                    <span className={`text-base font-bold ${ad.metrics.cpa !== null && ad.metrics.cpa > targets.breakEvenCpa ? 'text-rose-600' : 'text-slate-900'}`}>
                       {formatRupiah(ad.metrics.cpa)}
                     </span>
                   </div>
@@ -191,7 +195,7 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
                   <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-100">
                     <span className="text-[10px] text-slate-400 font-medium block">CTR</span>
                     <span className="text-base font-bold text-slate-900">
-                      {ad.metrics.ctr}%
+                      {ad.metrics.ctr !== null ? `${ad.metrics.ctr}%` : 'N/A'}
                     </span>
                   </div>
                 </div>
@@ -199,7 +203,7 @@ export const CreativePerformanceView: React.FC<CreativePerformanceViewProps> = (
                 {/* Supporting Metrics Bar */}
                 <div className="flex items-center justify-between text-xs text-slate-500 py-2 border-t border-slate-100 mb-4">
                   <span>Spend: <strong className="text-slate-800">{formatRupiah(ad.metrics.spend)}</strong></span>
-                  <span>Purchases: <strong className="text-slate-800">{ad.metrics.purchases} order</strong></span>
+                  <span>Purchases: <strong className="text-slate-800">{ad.metrics.purchases !== null ? `${ad.metrics.purchases} order` : 'N/A'}</strong></span>
                   <span>Freq: <strong className="text-slate-800">{formatFrequency(ad.metrics.frequency)}</strong></span>
                   <span>Composite: <strong className="text-indigo-600">{ad.compositeScore}/100</strong></span>
                 </div>

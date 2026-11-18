@@ -20,6 +20,8 @@ import { MetaIntegrationView } from './components/integrations/MetaIntegrationVi
 import { SettingsView } from './components/settings/SettingsView';
 import { AiAnalystModal } from './components/ai/AiAnalystModal';
 import { AiExplanationCard } from './components/ai/AiExplanationCard';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { AlertTriangle } from 'lucide-react';
 
 import { 
   Campaign, 
@@ -113,17 +115,24 @@ export default function App() {
 
   // Priority Issue for Account Health Banner (e.g. Creative Fatigue on Video 03)
   const priorityFatiguedAd = useMemo(() => {
-    return allCreatives.find((ad) => ad.status === 'PROBLEM' && ad.metrics.frequency >= 3.0);
+    return allCreatives.find(
+      (ad) => ad.status === 'PROBLEM' && ad.metrics.frequency !== null && ad.metrics.frequency >= 3.0
+    );
   }, [allCreatives]);
 
   // Sync / Refresh Handler for Meta Ads
-  const handleRefreshData = async () => {
+  const handleRefreshData = async (): Promise<{ syncStatus: string; errorMessage?: string }> => {
     setIsSyncing(true);
     try {
       const res = await metaAdsService.refreshInsights(currentPeriod);
       setLastSyncedAt(res.lastSyncedAt);
       setCampaigns(res.campaigns);
       setMetaConfig(metaAdsService.getConnectionConfig());
+      return { syncStatus: res.syncStatus, errorMessage: res.errorMessage };
+    } catch (err: any) {
+      setCampaigns([]);
+      setMetaConfig(metaAdsService.getConnectionConfig());
+      return { syncStatus: 'ERROR', errorMessage: err?.message || 'Gagal menyinkronkan data Meta Ads.' };
     } finally {
       setIsSyncing(false);
     }
@@ -140,9 +149,11 @@ export default function App() {
       ]);
       setCampaigns(insights.campaigns);
       setLandingPages(scaledLps);
+      setMetaConfig(metaAdsService.getConnectionConfig());
       setLastSyncedAt(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }));
       setIsSyncing(false);
     } catch {
+      setMetaConfig(metaAdsService.getConnectionConfig());
       setIsSyncing(false);
     }
   };
@@ -183,7 +194,7 @@ export default function App() {
 
   // Synchronize Overview AI Analysis with Meta & Landing Page data changes without infinite requests
   const aiSyncKey = useMemo(() => {
-    return `${currentPeriod}_${lastSyncedAt}_${targets.targetCpa}_${targets.targetRoas}_${campaigns.reduce((acc, c) => acc + c.metrics.spend, 0)}`;
+    return `${currentPeriod}_${lastSyncedAt}_${targets.targetCpa}_${targets.targetRoas}_${campaigns.reduce((acc, c) => acc + (c.metrics.spend ?? 0), 0)}`;
   }, [currentPeriod, lastSyncedAt, targets.targetCpa, targets.targetRoas, campaigns]);
 
   useEffect(() => {
@@ -250,6 +261,36 @@ export default function App() {
 
           {/* Main View Area */}
           <main className="flex-1 p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-6">
+            <ErrorBoundary
+              fallbackTitle="Gagal Merender Tampilan Halaman"
+              onReset={() => setCurrentTab('integrations')}
+            >
+            {/* Meta API Error / Empty Account Notice Banner */}
+            {metaConfig.mode === 'real' && (metaConfig.syncStatus === 'ERROR' || metaConfig.syncStatus === 'REAUTH_REQUIRED') && currentTab !== 'integrations' && (
+              <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-start gap-2.5 text-rose-900">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold block">
+                      {metaConfig.syncStatus === 'REAUTH_REQUIRED'
+                        ? 'Token Meta Ads Tidak Valid atau Kedaluwarsa'
+                        : 'Gagal Menyinkronkan Data dari Meta Marketing API'}
+                    </span>
+                    <span className="text-rose-700">
+                      {metaConfig.errorMessage || 'Terjadi kesalahan saat mengambil data dari Meta Graph API.'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCurrentTab('integrations')}
+                  className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-semibold shrink-0 cursor-pointer self-start sm:self-auto"
+                >
+                  Periksa Integrasi Meta
+                </button>
+              </div>
+            )}
+
             {/* VIEW 1: DASHBOARD OVERVIEW */}
             {currentTab === 'overview' && (
               <div className="space-y-6 animate-in fade-in duration-200">
@@ -484,6 +525,7 @@ export default function App() {
                 <SettingsView />
               </div>
             )}
+            </ErrorBoundary>
           </main>
         </div>
       </div>

@@ -18,8 +18,13 @@ async function startServer() {
     res.json({ status: 'ok', service: 'ALCO Meta Ads Analyst API' });
   });
 
-    // AI Diagnosis API Endpoint (Server-Side Gemini)
+  // AI Diagnosis API Endpoint (Server-Side Gemini)
   app.post('/api/ai/analyze', async (req, res) => {
+    const formatVal = (val: number | null | undefined, prefix = '', suffix = '') => {
+      if (val === null || val === undefined || isNaN(val)) return 'Tidak tersedia (N/A)';
+      return `${prefix}${val.toLocaleString('id-ID')}${suffix}`;
+    };
+
     try {
       const { 
         entityName, 
@@ -37,11 +42,6 @@ async function startServer() {
 
       const fallbackWhere = funnelEvaluation?.bottleneckTitle 
         || (evaluation?.primaryIssue?.includes('Landing Page') ? 'Landing Page' : 'Meta Ads Campaign');
-
-      const formatVal = (val: number | null | undefined, prefix = '', suffix = '') => {
-        if (val === null || val === undefined || isNaN(val)) return 'Tidak tersedia (N/A)';
-        return `${prefix}${val.toLocaleString('id-ID')}${suffix}`;
-      };
 
       if (!apiKey) {
         // Fallback response if no key configured in environment
@@ -237,8 +237,8 @@ Keluarkan format JSON dengan struktur yang persis:
         why: req.body?.funnelEvaluation?.detailedReason || 'Data menunjukkan fluktuasi lelang atau friksi pada alur konversi.',
         possibleCause: req.body?.funnelEvaluation?.detailedReason || 'Data menunjukkan fluktuasi lelang atau friksi pada alur konversi.',
         evidence: req.body?.funnelEvaluation?.evidence || req.body?.evaluation?.signals?.[0]?.evidence || [
-          `Spend: Rp${(req.body?.metrics?.spend || 0).toLocaleString('id-ID')}`,
-          `ROAS: ${req.body?.metrics?.roas || 0}x`,
+          `Spend: ${formatVal(req.body?.metrics?.spend, 'Rp')}`,
+          `ROAS: ${formatVal(req.body?.metrics?.roas, '', 'x')}`,
         ],
         confidence: req.body?.funnelEvaluation?.confidence || req.body?.evaluation?.confidence || 'High',
         recommendedAction: req.body?.funnelEvaluation?.recommendedAction || req.body?.evaluation?.recommendedAction || 'Pantau metrik utama selama 24 jam ke depan.',
